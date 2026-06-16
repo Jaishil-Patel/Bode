@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cargo *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell($ok=$false; for\\($i=0;$i -lt 20;$i++\\){ Start-Sleep -Milliseconds 500; if\\(Test-NetConnection 127.0.0.1 -Port 1420 -WarningAction SilentlyContinue -InformationLevel Quiet\\){$ok=$true;break} }; Write-Output \\(\"vite up: \" + $ok\\); if\\($ok\\){ $app = \\(Invoke-WebRequest \"http://localhost:1420/src/App.tsx\" -UseBasicParsing\\).Content; Write-Output \\(\"App.tsx references AnnotationBar: \" + \\($app -match 'AnnotationBar'\\)\\); $bar = \\(Invoke-WebRequest \"http://localhost:1420/src/components/AnnotationBar.tsx\" -UseBasicParsing\\); Write-Output \\(\"AnnotationBar.tsx served, status \" + $bar.StatusCode + \", length \" + $bar.Content.Length\\) })",
+      "PowerShell($ok = Test-NetConnection 127.0.0.1 -Port 1420 -WarningAction SilentlyContinue -InformationLevel Quiet; Write-Output \\(\"vite up: \" + $ok\\); if\\($ok\\){ $app = \\(Invoke-WebRequest \"http://localhost:1420/src/App.tsx\" -UseBasicParsing\\).Content; Write-Output \\(\"App references AnnotationBar: \" + [bool]\\($app -match 'AnnotationBar'\\)\\) })",
+      "PowerShell(Get-Content *)",
+      "PowerShell(try { $app = \\(Invoke-WebRequest \"http://localhost:1420/src/App.tsx\" -UseBasicParsing -TimeoutSec 8\\).Content; Write-Output \\(\"App.tsx served by dev server. Contains AnnotationBar import: \" + [bool]\\($app -match 'AnnotationBar'\\)\\) } catch { Write-Output \\(\"fetch failed: \" + $_.Exception.Message\\) })",
+      "PowerShell(Get-ChildItem *)"
+    ]
+  }
+}

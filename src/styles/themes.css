@@ -1,0 +1,59 @@
+/*
+ * Theme tokens. Each [data-theme] block redefines the CSS variables consumed by
+ * Tailwind utilities (see tailwind.config.js) and raw CSS. Adding a theme is just
+ * one new block here — no component changes needed.
+ *
+ * The "custom" theme intentionally defines no values: useSettings writes the user's
+ * chosen variables inline onto <html> so they override whatever base theme is active.
+ */
+
+:root {
+  --font-ui: "Inter", "Segoe UI", system-ui, sans-serif;
+  --page-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  --radius: 8px;
+}
+
+[data-theme="light"] {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eceef1;
+  --border: #d9dce1;
+  --text: #1c1e21;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-fg: #ffffff;
+}
+
+[data-theme="dark"] {
+  --bg: #1a1b1e;
+  --surface: #232428;
+  --surface-2: #2b2d31;
+  --border: #34363b;
+  --text: #e6e7ea;
+  --muted: #9aa0a6;
+  --accent: #6366f1;
+  --accent-fg: #ffffff;
+}
+
+[data-theme="sepia"] {
+  --bg: #efe6d4;
+  --surface: #f7f0e1;
+  --surface-2: #e8ddc6;
+  --border: #d8caa9;
+  --text: #3a3127;
+  --muted: #8a7c63;
+  --accent: #b4622d;
+  --accent-fg: #fdf6ea;
+}
+
+[data-theme="oled"] {
+  --bg: #000000;
+  --surface: #0c0c0d;
+  --surface-2: #161618;
+  --border: #232325;
+  --text: #ededed;
+  --muted: #8b8b8e;
+  --accent: #22d3ee;
+  --accent-fg: #001014;
+  --page-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
