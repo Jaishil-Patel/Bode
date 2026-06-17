@@ -8,7 +8,16 @@ import { load, type Store } from "@tauri-apps/plugin-store";
  * Keeping coordinates scale-independent means annotations stay anchored at any zoom.
  */
 
-export type Tool = "select" | "highlight" | "text" | "rect" | "ellipse" | "pen";
+export type Tool =
+  | "select"
+  | "highlight"
+  | "text"
+  | "rect"
+  | "ellipse"
+  | "pen"
+  | "edit"
+  | "signature"
+  | "eraser";
 
 interface Base {
   id: string;
@@ -58,13 +67,34 @@ export interface TextAnno extends Base {
   w: number;
   fontSize: number;
   text: string;
+  // Font family copied from the original text when editing, so the replacement matches.
+  // Undefined for free-standing text boxes (they use the UI font).
+  fontFamily?: string;
+  // For edited text: the original text and its on-page width (PDF points). The export
+  // horizontally scales the replacement to fill this width using pdf-lib's metrics, so the
+  // saved PDF matches the original width without changing the (already-correct) glyph height.
+  fitText?: string;
+  fitWidth?: number;
+  // Horizontal scale applied on screen so the replacement fills the original width with the
+  // substitute font (mirrors pdf.js's per-span scaleX). Keeps glyph HEIGHT equal to the
+  // original — fixing the "edited text looks bigger" problem. Undefined/1 for free text boxes.
+  scaleX?: number;
+}
+export interface SignatureAnno extends Base {
+  type: "signature";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  dataUrl: string; // trimmed PNG of the drawn signature
 }
 export type Annotation =
   | HighlightAnno
   | RectAnno
   | EllipseAnno
   | PenAnno
-  | TextAnno;
+  | TextAnno
+  | SignatureAnno;
 
 interface AnnotationState {
   hydrated: boolean;
@@ -78,6 +108,13 @@ interface AnnotationState {
   highlightPresets: string[]; // exactly 3
   activePreset: number; // 0..2
   selectedId: string | null;
+  signatureDataUrl: string | null; // last drawn signature, reused for quick re-placement
+  signaturePadOpen: boolean; // transient: whether the draw-a-signature modal is showing
+
+  // Undo/redo history of `byFile` snapshots (session-only, not persisted). Each entry is the
+  // whole annotation map before a mutation, so undo/redo covers every edit across files.
+  past: Record<string, Annotation[]>[];
+  future: Record<string, Annotation[]>[];
 
   hydrate: () => Promise<void>;
   setTool: (t: Tool) => void;
@@ -88,11 +125,15 @@ interface AnnotationState {
   setHighlightPreset: (i: number, c: string) => void;
   setActivePreset: (i: number) => void;
   setSelected: (id: string | null) => void;
+  setSignatureDataUrl: (url: string | null) => void;
+  setSignaturePadOpen: (open: boolean) => void;
 
   add: (file: string, anno: Annotation) => void;
   update: (file: string, id: string, patch: Partial<Annotation>) => void;
   remove: (file: string, id: string) => void;
   clearPage: (file: string, pageIndex: number) => void;
+  undo: () => void;
+  redo: () => void;
 
   /** Color the active drawing tool should use right now. */
   activeColor: () => string;
@@ -114,6 +155,7 @@ type Persisted = Pick<
   | "fillShapes"
   | "fillOpacity"
   | "highlightPresets"
+  | "signatureDataUrl"
 >;
 
 const DEFAULT_PRESETS = ["#fde047", "#86efac", "#93c5fd"]; // yellow, green, blue
@@ -148,6 +190,7 @@ function snapshot(s: AnnotationState): Persisted {
     fillShapes: s.fillShapes,
     fillOpacity: s.fillOpacity,
     highlightPresets: s.highlightPresets,
+    signatureDataUrl: s.signatureDataUrl,
   };
 }
 
@@ -161,8 +204,20 @@ async function persist(get: () => AnnotationState) {
   }
 }
 
+const HISTORY_LIMIT = 100;
+
 export const useAnnotations = create<AnnotationState>((set, get) => {
   const save = () => void persist(get);
+
+  // Capture the current annotation map as one undo step and drop the redo stack.
+  const pushHistory = () =>
+    set((st) => ({ past: [...st.past, st.byFile].slice(-HISTORY_LIMIT), future: [] }));
+
+  // Consecutive updates to the same annotation (a drag-resize, or a burst of typing) collapse
+  // into a single undo step: only the first one snapshots history.
+  let coalesceKey: string | null = null;
+  let coalesceAt = 0;
+
   return {
     hydrated: false,
     byFile: {},
@@ -175,6 +230,10 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     highlightPresets: [...DEFAULT_PRESETS],
     activePreset: 0,
     selectedId: null,
+    signatureDataUrl: null,
+    signaturePadOpen: false,
+    past: [],
+    future: [],
 
     hydrate: async () => {
       try {
@@ -192,6 +251,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
               saved.highlightPresets?.length === 3
                 ? saved.highlightPresets
                 : [...DEFAULT_PRESETS],
+            signatureDataUrl: saved.signatureDataUrl ?? null,
           });
         }
       } catch {
@@ -259,8 +319,15 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     },
     setActivePreset: (i) => set({ activePreset: i }),
     setSelected: (id) => set({ selectedId: id }),
+    setSignatureDataUrl: (url) => {
+      set({ signatureDataUrl: url });
+      save();
+    },
+    setSignaturePadOpen: (open) => set({ signaturePadOpen: open }),
 
     add: (file, anno) => {
+      pushHistory();
+      coalesceKey = null;
       set((st) => ({
         byFile: { ...st.byFile, [file]: [...(st.byFile[file] ?? []), anno] },
         selectedId: anno.id,
@@ -268,6 +335,12 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       save();
     },
     update: (file, id, patch) => {
+      const now = Date.now();
+      const key = `${file}:${id}`;
+      // Snapshot only when starting a new edit (different target, or after a short pause).
+      if (!(key === coalesceKey && now - coalesceAt < 700)) pushHistory();
+      coalesceKey = key;
+      coalesceAt = now;
       set((st) => ({
         byFile: {
           ...st.byFile,
@@ -279,6 +352,8 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       save();
     },
     remove: (file, id) => {
+      pushHistory();
+      coalesceKey = null;
       set((st) => ({
         byFile: { ...st.byFile, [file]: (st.byFile[file] ?? []).filter((a) => a.id !== id) },
         selectedId: st.selectedId === id ? null : st.selectedId,
@@ -286,11 +361,37 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       save();
     },
     clearPage: (file, pageIndex) => {
+      pushHistory();
+      coalesceKey = null;
       set((st) => ({
         byFile: {
           ...st.byFile,
           [file]: (st.byFile[file] ?? []).filter((a) => a.pageIndex !== pageIndex),
         },
+      }));
+      save();
+    },
+    undo: () => {
+      coalesceKey = null;
+      const { past } = get();
+      if (past.length === 0) return;
+      set((st) => ({
+        byFile: st.past[st.past.length - 1],
+        past: st.past.slice(0, -1),
+        future: [st.byFile, ...st.future].slice(0, HISTORY_LIMIT),
+        selectedId: null,
+      }));
+      save();
+    },
+    redo: () => {
+      coalesceKey = null;
+      const { future } = get();
+      if (future.length === 0) return;
+      set((st) => ({
+        byFile: st.future[0],
+        future: st.future.slice(1),
+        past: [...st.past, st.byFile].slice(-HISTORY_LIMIT),
+        selectedId: null,
       }));
       save();
     },

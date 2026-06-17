@@ -53,6 +53,44 @@ export default function PdfViewer() {
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
+  // Two-finger pinch zooms on touch devices (Android). Non-passive so we can prevent the
+  // WebView's native pinch-zoom and feed the gesture into our own scale instead.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let lastDist = 0;
+    const dist = (t: TouchList) =>
+      Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) lastDist = dist(e.touches);
+    };
+    const onMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return;
+      e.preventDefault();
+      const d = dist(e.touches);
+      if (lastDist > 0 && d > 0) {
+        const factor = d / lastDist;
+        if (Math.abs(factor - 1) > 0.005) {
+          useViewer.getState().zoomBy(factor);
+          lastDist = d;
+        }
+      } else {
+        lastDist = d;
+      }
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) lastDist = 0;
+    };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+    };
+  }, []);
+
   // Resolve fit mode into an actual scale and publish it.
   const usableW = Math.max(size.w - PADDING * 2, 100);
   const usableH = Math.max(size.h - PADDING * 2, 100);

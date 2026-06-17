@@ -8,8 +8,10 @@ import AnnotationBar from "./components/AnnotationBar";
 import Sidebar from "./components/Sidebar";
 import SearchBar from "./components/SearchBar";
 import CommandPalette from "./components/CommandPalette";
+import SignaturePad from "./components/SignaturePad";
 import SettingsPanel from "./settings/SettingsPanel";
 import PdfViewer from "./pdf/PdfViewer";
+import { isAndroid } from "./platform/files";
 import { IconOpen, IconPen } from "./components/icons";
 
 function ShowToolsButton() {
@@ -30,6 +32,9 @@ function EmptyState() {
   const openWithDialog = useViewer((s) => s.openWithDialog);
   const openPath = useViewer((s) => s.openPath);
   const { recents } = useSettings();
+  // Android hands back content:// URIs whose read permission isn't kept after the app closes, so
+  // a stored recent can't be reopened — hide the list there rather than show broken entries.
+  const showRecents = recents.length > 0 && !isAndroid();
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-6 p-8">
@@ -43,7 +48,7 @@ function EmptyState() {
       >
         <IconOpen /> Open a PDF
       </button>
-      {recents.length > 0 && (
+      {showRecents && (
         <div className="w-full max-w-sm">
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Recent</h2>
           <div className="flex flex-col gap-1">
@@ -101,6 +106,17 @@ export default function App() {
       } else if (mod && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleSidebar();
+      } else if (mod && e.key.toLowerCase() === "z") {
+        // Let inputs/textareas keep their native text undo; otherwise undo annotations.
+        if (typing) return;
+        e.preventDefault();
+        const { undo, redo } = useAnnotations.getState();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (mod && e.key.toLowerCase() === "y") {
+        if (typing) return;
+        e.preventDefault();
+        useAnnotations.getState().redo();
       } else if (mod && (e.key === "=" || e.key === "+")) {
         e.preventDefault();
         zoomIn();
@@ -136,6 +152,9 @@ export default function App() {
           r: () => useAnnotations.getState().setTool("rect"),
           o: () => useAnnotations.getState().setTool("ellipse"),
           p: () => useAnnotations.getState().setTool("pen"),
+          e: () => useAnnotations.getState().setTool("edit"),
+          s: () => useAnnotations.getState().setTool("signature"),
+          x: () => useAnnotations.getState().setTool("eraser"),
         };
         const fn = tools[e.key.toLowerCase()];
         if (fn) {
@@ -180,6 +199,7 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      <SignaturePad />
     </div>
   );
 }

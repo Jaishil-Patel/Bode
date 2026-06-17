@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { readPdfBytes } from "../platform/files";
 import { loadPdfFromBytes, getOutline, type OutlineItem } from "../pdf/usePdfDocument";
 import { searchDocument, type SearchMatch } from "../pdf/search";
 import type { PdfDocument } from "../pdf/pdfWorker";
@@ -100,8 +100,7 @@ export const useViewer = create<ViewerState>((set, get) => ({
   openPath: async (path: string) => {
     set({ loading: true, error: null });
     try {
-      const bytes = await invoke<number[] | Uint8Array>("read_file_bytes", { path });
-      const data = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+      const data = await readPdfBytes(path);
       const doc = await loadPdfFromBytes(data);
       const first = await doc.getPage(1);
       const vp = first.getViewport({ scale: 1 });

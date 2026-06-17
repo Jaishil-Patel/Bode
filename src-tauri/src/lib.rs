@@ -12,6 +12,13 @@ fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("Failed to read {path}: {e}"))
 }
 
+/// Write raw bytes to a file. Used to save an exported (flattened) PDF chosen via a save dialog.
+/// A dedicated command keeps filesystem access narrow, matching `read_file_bytes`.
+#[tauri::command]
+fn write_file_bytes(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, bytes).map_err(|e| format!("Failed to write {path}: {e}"))
+}
+
 /// Return the path Bode was launched with, if any (consumed once).
 #[tauri::command]
 fn take_launch_file(state: State<LaunchFile>) -> Option<String> {
@@ -78,6 +85,7 @@ pub fn run() {
         .manage(LaunchFile(Mutex::new(launch_path)))
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
+            write_file_bytes,
             take_launch_file,
             set_titlebar_color
         ])
