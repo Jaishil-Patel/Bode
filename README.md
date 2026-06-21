@@ -4,6 +4,8 @@ Do you hate the ads and bloating some other pdf apps have, I've got the perfect 
 
 A clean, fast, customizable PDF reader **and** annotator that runs on desktop (Windows/macOS/Linux) and Android — built with Tauri + React.
 
+**Bode is free and open source.** Contributions are welcome — whether that's fixing a bug, adding a feature, improving the docs, or just opening an issue with an idea. See [Contributing](#contributing) below to get started.
+
 ## Features
 
 ### Viewing
@@ -113,3 +115,19 @@ src-tauri/           Rust shell (file reading/writing, launch-file handling, plu
 - **Cross-platform file access:** desktop reads/writes via narrow Rust commands (any path); Android
   goes through `@tauri-apps/plugin-fs` to handle the `content://` URIs returned by the system file
   picker (`src/platform/files.ts`).
+
+## Contributing
+
+Bode is open source and contributions of all kinds are welcome — code, docs, bug reports, and feature ideas.
+
+1. **Open an issue first** for anything non-trivial, so we can discuss the approach before you build it.
+2. **Fork** the repo and create a branch off `main` (`git checkout -b my-feature`).
+3. Set up your environment by following [Prerequisites](#prerequisites) and [Develop](#develop), and make sure the app runs locally.
+4. Keep changes focused and match the existing code style.
+5. **Open a pull request** describing what you changed and why. Reference the issue it addresses.
+
+Not sure where to start? Check the open issues for anything tagged "good first issue", or just open a discussion with your idea. Every bit helps.
+
+## License
+
+Bode is licensed under the [Apache License 2.0](LICENSE). You're free to use, modify, and distribute it, including commercially, provided you preserve the license and attribution notices. By contributing, you agree that your contributions will be licensed under the same terms.
