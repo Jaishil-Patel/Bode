@@ -15,14 +15,26 @@ import PdfViewer from "./pdf/PdfViewer";
 import { isAndroid } from "./platform/files";
 import { IconOpen, IconPen } from "./components/icons";
 
+// Keep the collapsed pill anchored to the same edge as the full tools bar, so re-opening it
+// reveals the bar right where the mini icon sits. Mirrors AnnotationBar's posStyle.
+const toolsPos = (side: "bottom" | "top" | "left" | "right"): React.CSSProperties =>
+  side === "bottom"
+    ? { bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)", left: "50%", transform: "translateX(-50%)" }
+    : side === "top"
+    ? { top: "calc(env(safe-area-inset-top) + 3.5rem)", left: "50%", transform: "translateX(-50%)" }
+    : side === "left"
+    ? { left: "0.75rem", top: "50%", transform: "translateY(-50%)" }
+    : { right: "0.75rem", top: "50%", transform: "translateY(-50%)" };
+
 function ShowToolsButton() {
   const updateLayout = useSettings((s) => s.updateLayout);
+  const side = useSettings((s) => s.layout.toolsSide);
   return (
     <button
       title="Show annotation tools"
       onClick={() => updateLayout({ annotationsHidden: false })}
-      className="no-select fixed bottom-5 left-1/2 z-40 flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border border-white/15 text-text shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150 transition-transform hover:scale-105"
-      style={{ background: "color-mix(in srgb, var(--surface) 42%, transparent)" }}
+      className="no-select fixed z-40 flex h-11 w-11 items-center justify-center rounded-full border border-white/15 text-text shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150 transition-transform hover:scale-105"
+      style={{ ...toolsPos(side), background: "color-mix(in srgb, var(--surface) 42%, transparent)" }}
     >
       <IconPen />
     </button>
