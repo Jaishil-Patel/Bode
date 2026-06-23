@@ -63,5 +63,18 @@ export const IconUndo = (p: P) =>
   svg(<><path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10H8" /></>, p.className);
 export const IconRedo = (p: P) =>
   svg(<><path d="m15 14 5-5-5-5" /><path d="M20 9H9a5 5 0 0 0 0 10h7" /></>, p.className);
+// Drag handle: two columns of dots (a "grip").
+export const IconGrip = (p: P) =>
+  svg(
+    <>
+      <circle cx="9" cy="6" r="1" />
+      <circle cx="9" cy="12" r="1" />
+      <circle cx="9" cy="18" r="1" />
+      <circle cx="15" cy="6" r="1" />
+      <circle cx="15" cy="12" r="1" />
+      <circle cx="15" cy="18" r="1" />
+    </>,
+    p.className
+  );
 export const IconEraser = (p: P) =>
   svg(<><path d="M7 21 3.5 17.5a2 2 0 0 1 0-2.8l8.7-8.7a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8L13 19" /><path d="M7 21h12" /><path d="m9 12 4 4" /></>, p.className);

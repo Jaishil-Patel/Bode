@@ -15,6 +15,7 @@ export default function SignaturePad() {
   const setOpen = useAnnotations((s) => s.setSignaturePadOpen);
   const setSignatureDataUrl = useAnnotations((s) => s.setSignatureDataUrl);
   const setTool = useAnnotations((s) => s.setTool);
+  const hasExisting = useAnnotations((s) => s.signatureDataUrl !== null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
@@ -118,7 +119,7 @@ export default function SignaturePad() {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-border px-4 py-3 text-sm font-medium text-text">
-          Draw your signature
+          {hasExisting ? "Draw a new signature" : "Draw your signature"}
         </div>
         <div className="p-4">
           <canvas

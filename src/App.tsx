@@ -4,6 +4,7 @@ import { useViewer } from "./store/viewerStore";
 import { useSettings } from "./settings/useSettings";
 import { useAnnotations } from "./annotations/useAnnotations";
 import Toolbar from "./components/Toolbar";
+import TabBar from "./components/TabBar";
 import AnnotationBar from "./components/AnnotationBar";
 import Sidebar from "./components/Sidebar";
 import SearchBar from "./components/SearchBar";
@@ -80,11 +81,18 @@ export default function App() {
   useEffect(() => {
     hydrate();
     useAnnotations.getState().hydrate();
-    invoke<string | null>("take_launch_file")
-      .then((p) => {
-        if (p) openPath(p);
-      })
-      .catch(() => {});
+    // A window spawned for the "separate windows" open mode carries its file in the URL;
+    // otherwise ask the backend for any file-association / "Open with" launch path.
+    const fileParam = new URLSearchParams(window.location.search).get("file");
+    if (fileParam) {
+      openPath(decodeURIComponent(fileParam));
+    } else {
+      invoke<string | null>("take_launch_file")
+        .then((p) => {
+          if (p) openPath(p);
+        })
+        .catch(() => {});
+    }
   }, [hydrate, openPath]);
 
   // Global keyboard shortcuts.
@@ -173,6 +181,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col bg-bg">
       {showToolbar && <Toolbar onOpenSettings={() => setSettingsOpen(true)} />}
+      <TabBar />
       {doc && !layout.zenMode && (layout.annotationsHidden ? <ShowToolsButton /> : <AnnotationBar />)}
 
       <div className={`flex min-h-0 flex-1 ${layout.sidebarSide === "right" ? "flex-row-reverse" : ""}`}>

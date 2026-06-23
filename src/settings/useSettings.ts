@@ -19,9 +19,13 @@ export interface LayoutSettings {
   sidebarOpen: boolean;
   sidebarSide: "left" | "right";
   sidebarTab: "thumbnails" | "outline";
+  // Which edge the floating annotation/tools bar docks to (vertical on left/right).
+  toolsSide: "bottom" | "top" | "left" | "right";
   toolbarAutoHide: boolean;
   zenMode: boolean;
   annotationsHidden: boolean; // hide the floating annotation pill
+  // How additional PDFs open: stacked as tabs in this window, or each in its own OS window.
+  openMode: "tabs" | "windows";
 }
 
 interface SettingsState {
@@ -46,12 +50,14 @@ interface SettingsState {
 const DEFAULT_LAYOUT: LayoutSettings = {
   continuous: true,
   pageGap: 16,
-  sidebarOpen: true,
+  sidebarOpen: false,
   sidebarSide: "left",
   sidebarTab: "thumbnails",
+  toolsSide: "bottom",
   toolbarAutoHide: false,
   zenMode: false,
   annotationsHidden: false,
+  openMode: "tabs",
 };
 
 const STORE_FILE = "settings.json";

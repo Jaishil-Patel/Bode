@@ -50,6 +50,32 @@ function Toggle({
   );
 }
 
+function Segmented({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex overflow-hidden rounded-md border border-border">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={`px-2.5 py-1 text-xs transition-colors ${
+            value === o.value ? "bg-accent text-accent-fg" : "bg-surface-2 text-muted hover:text-text"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const {
     theme,
@@ -115,6 +141,32 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             checked={layout.sidebarSide === "left"}
             onChange={(v) => updateLayout({ sidebarSide: v ? "left" : "right" })}
           />
+          <div className="flex items-center justify-between py-1.5 text-sm text-text">
+            Tools bar position
+            <Segmented
+              value={layout.toolsSide}
+              options={[
+                { value: "bottom", label: "Bottom" },
+                { value: "top", label: "Top" },
+                { value: "left", label: "Left" },
+                { value: "right", label: "Right" },
+              ]}
+              onChange={(v) =>
+                updateLayout({ toolsSide: v as "bottom" | "top" | "left" | "right" })
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between py-1.5 text-sm text-text">
+            Open PDFs in
+            <Segmented
+              value={layout.openMode}
+              options={[
+                { value: "tabs", label: "Tabs" },
+                { value: "windows", label: "Windows" },
+              ]}
+              onChange={(v) => updateLayout({ openMode: v as "tabs" | "windows" })}
+            />
+          </div>
           <Toggle
             label="Auto-hide toolbar in zen mode"
             checked={layout.toolbarAutoHide}
