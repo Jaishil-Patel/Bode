@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   useAnnotations,
   newId,
@@ -6,6 +6,7 @@ import {
   type PenAnno,
   type RectAnno,
   type SignatureAnno,
+  type TextAnno,
   type Rect,
 } from "./useAnnotations";
 
@@ -43,7 +44,8 @@ function eraserHits(a: Annotation, px: number, py: number, tol: number): boolean
       return a.rects.some((r) => inBox(px, py, r.x, r.y, r.w, r.h, tol));
     case "text": {
       const lines = a.text.split("\n").length || 1;
-      return inBox(px, py, a.x, a.y, a.w, a.fontSize * 1.25 * lines, tol);
+      const h = Math.max(a.fontSize * 1.25 * lines, a.h ?? 0);
+      return inBox(px, py, a.x, a.y, a.w, h, tol);
     }
     case "pen": {
       const t = a.strokeWidth / 2 + tol;
@@ -90,6 +92,14 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   const erasing = useRef(false);
   const [draft, setDraft] = useState<Annotation | null>(null);
   const [drag, setDrag] = useState<Drag>(null);
+  // Which text box is in edit mode (caret active). Double-click to enter; blur/deselect to exit.
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Leave edit mode if the tool changes away from select or another annotation is selected.
+  useEffect(() => {
+    if (editingId && (tool !== "select" || (selectedId && selectedId !== editingId)))
+      setEditingId(null);
+  }, [tool, selectedId, editingId]);
 
   // Tools that draw/place by interacting with the overlay directly. Highlight and edit are
   // NOT here — they work off the real text layer (handled in effects below), so the overlay
@@ -132,14 +142,6 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       return;
     }
 
-    if (tool === "text") {
-      const id = newId();
-      add(filePath, { id, pageIndex, type: "text", x: p.x, y: p.y, w: 180, fontSize, color, text: "" });
-      setTool("select");
-      setSelected(id);
-      return;
-    }
-
     if (tool === "signature") {
       const { signatureDataUrl, setSignaturePadOpen } = useAnnotations.getState();
       if (!signatureDataUrl) {
@@ -177,6 +179,8 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     const id = newId();
     if (tool === "pen") {
       setDraft({ id, pageIndex, type: "pen", color, strokeWidth, points: [p] });
+    } else if (tool === "text") {
+      setDraft({ id, pageIndex, type: "text", color, x: p.x, y: p.y, w: 0, h: 0, fontSize, text: "" });
     } else {
       setDraft({
         id,
@@ -311,6 +315,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       });
       setTool("select");
       setSelected(id);
+      setEditingId(id);
     };
     document.addEventListener("click", onClick);
     return () => document.removeEventListener("click", onClick);
@@ -339,6 +344,22 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
 
   const onPointerUp = () => {
     if (!draft) return;
+    if (draft.type === "text") {
+      const t = draft as TextAnno & { h: number };
+      // A tiny drag is really a click → default-width auto-height box; a real drag keeps the
+      // dragged width and uses its height as the box's minimum.
+      const sized = t.w >= 5;
+      const anno: TextAnno = sized
+        ? { ...t, w: t.w, h: t.h > 5 ? t.h : undefined }
+        : { ...t, w: 180, h: undefined };
+      add(filePath, anno);
+      setTool("select");
+      setSelected(anno.id);
+      setEditingId(anno.id); // ready to type immediately
+      setDraft(null);
+      start.current = null;
+      return;
+    }
     const ok =
       draft.type === "pen"
         ? (draft as PenAnno).points.length > 1
@@ -387,6 +408,27 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       const r = ref.current!.getBoundingClientRect();
       const w = Math.max(20, (ev.clientX - r.left) / scale - a.x);
       update(filePath, a.id, { w, h: w * ratio } as Partial<Annotation>);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  // Resize a text box from its bottom-right corner. Width is free; height becomes the box's
+  // minimum (the box still grows past it to fit text). No aspect-ratio lock.
+  const startResizeText = (e: React.PointerEvent, a: TextAnno) => {
+    if (tool !== "select") return;
+    e.stopPropagation();
+    setSelected(a.id);
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      const r = ref.current!.getBoundingClientRect();
+      const w = Math.max(40, (ev.clientX - r.left) / scale - a.x);
+      const h = Math.max(a.fontSize * 1.3, (ev.clientY - r.top) / scale - a.y);
+      update(filePath, a.id, { w, h } as Partial<Annotation>);
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -558,76 +600,44 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
           .filter((a) => a.type !== "text" && a.type !== "signature")
           .map((a) => renderShape(withDrag(a), false))}
         {draft && draft.type !== "text" && renderShape(draft, true)}
+        {draft && draft.type === "text" && (
+          <rect
+            x={(draft as TextAnno).x * scale}
+            y={(draft as TextAnno).y * scale}
+            width={(draft as TextAnno & { w: number }).w * scale}
+            height={(draft as TextAnno & { h: number }).h * scale}
+            fill="none"
+            stroke="var(--accent)"
+            strokeWidth={1}
+            strokeDasharray="4 3"
+          />
+        )}
         {selBox}
       </svg>
 
       {pageAnnos
-        .filter((a): a is Extract<Annotation, { type: "text" }> => a.type === "text")
-        .map((a) => {
-          const d = withDrag(a) as typeof a;
-          const selected = a.id === selectedId;
-          const sx = a.scaleX ?? 1;
-          return (
-            <div
-              key={a.id}
-              onPointerDown={(e) => {
-                // Drag from the box edge; let the textarea handle inner clicks.
-                if (tool === "select" && (e.target as HTMLElement).dataset.handle) startMove(e, a);
-              }}
-              style={{
-                position: "absolute",
-                left: d.x * scale,
-                top: d.y * scale,
-                width: a.w * scale,
-                pointerEvents: annoPE,
-                outline: selected ? "1px dashed var(--accent)" : "none",
-              }}
-            >
-              {selected && (
-                <div
-                  data-handle="1"
-                  title="Drag to move"
-                  style={{
-                    position: "absolute",
-                    top: -14,
-                    left: 0,
-                    height: 12,
-                    width: "100%",
-                    cursor: "move",
-                    background: "var(--accent)",
-                    opacity: 0.5,
-                    borderRadius: 3,
-                  }}
-                />
-              )}
-              <textarea
-                value={a.text}
-                placeholder="Text…"
-                onChange={(e) => update(filePath, a.id, { text: e.target.value })}
-                onFocus={() => setSelected(a.id)}
-                spellCheck={false}
-                style={{
-                  // Stretch horizontally to the original width (sx) while keeping glyph height
-                  // at the font size, so the box's visible width stays a.w * scale.
-                  width: (a.w * scale) / sx,
-                  transform: sx !== 1 ? `scaleX(${sx})` : undefined,
-                  transformOrigin: "0 0",
-                  resize: "none",
-                  border: "none",
-                  outline: "none",
-                  background: "transparent",
-                  color: a.color,
-                  fontSize: a.fontSize * scale,
-                  lineHeight: 1.25,
-                  fontFamily: a.fontFamily ?? "var(--font-ui)",
-                  overflow: "hidden",
-                  padding: 0,
-                  height: Math.max(a.fontSize * scale * 1.3, (a.text.split("\n").length) * a.fontSize * scale * 1.3),
-                }}
-              />
-            </div>
-          );
-        })}
+        .filter((a): a is TextAnno => a.type === "text")
+        .map((a) => (
+          <TextBox
+            key={a.id}
+            anno={withDrag(a) as TextAnno}
+            scale={scale}
+            selected={a.id === selectedId}
+            editing={editingId === a.id}
+            interactive={tool === "select"}
+            pe={annoPE}
+            onChangeText={(text) => update(filePath, a.id, { text })}
+            onSelect={() => setSelected(a.id)}
+            onStartMove={(e) => startMove(e, a)}
+            onStartResize={(e) => startResizeText(e, a)}
+            onDelete={() => remove(filePath, a.id)}
+            onBeginEdit={() => {
+              setSelected(a.id);
+              setEditingId(a.id);
+            }}
+            onEndEdit={() => setEditingId((id) => (id === a.id ? null : id))}
+          />
+        ))}
 
       {pageAnnos
         .filter((a): a is SignatureAnno => a.type === "signature")
@@ -677,6 +687,157 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
             </div>
           );
         })}
+    </div>
+  );
+}
+
+interface TextBoxProps {
+  anno: TextAnno; // already includes any live drag offset
+  scale: number;
+  selected: boolean;
+  editing: boolean;
+  interactive: boolean; // select tool active → movable/editable
+  pe: React.CSSProperties["pointerEvents"];
+  onChangeText: (text: string) => void;
+  onSelect: () => void;
+  onStartMove: (e: React.PointerEvent) => void;
+  onStartResize: (e: React.PointerEvent) => void;
+  onBeginEdit: () => void;
+  onEndEdit: () => void;
+  onDelete: () => void;
+}
+
+function TextBox({
+  anno: a,
+  scale,
+  selected,
+  editing,
+  interactive,
+  pe,
+  onChangeText,
+  onSelect,
+  onStartMove,
+  onStartResize,
+  onBeginEdit,
+  onEndEdit,
+  onDelete,
+}: TextBoxProps) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const sx = a.scaleX ?? 1;
+  const lineH = a.fontSize * scale * 1.25;
+
+  // Grow the textarea to fit wrapped content while honoring the dragged/resized minimum height.
+  useLayoutEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "0px"; // reset so scrollHeight reflects content, not the prior height
+    const minH = Math.max(lineH, (a.h ?? 0) * scale);
+    ta.style.height = `${Math.max(ta.scrollHeight, minH)}px`;
+  }, [a.text, a.w, a.h, a.fontSize, scale, sx, lineH]);
+
+  // Focus when entering edit mode.
+  useEffect(() => {
+    if (editing) taRef.current?.focus();
+  }, [editing]);
+
+  return (
+    <div
+      onPointerDown={(e) => {
+        // While editing, let the textarea handle clicks/caret. Otherwise drag moves the box
+        // (but not when grabbing the resize handle).
+        if (!interactive || editing) return;
+        if ((e.target as HTMLElement).dataset.resize) return;
+        onStartMove(e);
+      }}
+      onDoubleClick={() => interactive && onBeginEdit()}
+      style={{
+        position: "absolute",
+        left: a.x * scale,
+        top: a.y * scale,
+        width: a.w * scale,
+        pointerEvents: pe,
+        outline: selected ? "1px dashed var(--accent)" : "none",
+        cursor: interactive && !editing ? "move" : "default",
+      }}
+    >
+      <textarea
+        ref={taRef}
+        value={a.text}
+        placeholder="Text…"
+        readOnly={!editing}
+        onChange={(e) => onChangeText(e.target.value)}
+        onFocus={onSelect}
+        onBlur={onEndEdit}
+        spellCheck={false}
+        style={{
+          // Stretch horizontally to the original width (sx) while keeping glyph height
+          // at the font size, so the box's visible width stays a.w * scale.
+          width: (a.w * scale) / sx,
+          transform: sx !== 1 ? `scaleX(${sx})` : undefined,
+          transformOrigin: "0 0",
+          resize: "none",
+          border: "none",
+          outline: "none",
+          background: "transparent",
+          color: a.color,
+          fontSize: a.fontSize * scale,
+          lineHeight: 1.25,
+          fontFamily: a.fontFamily ?? "var(--font-ui)",
+          overflow: "hidden",
+          padding: 0,
+          // When not editing, clicks should fall through to the wrapper so dragging moves the box.
+          pointerEvents: editing ? "auto" : "none",
+          cursor: editing ? "text" : "move",
+        }}
+      />
+      {selected && interactive && !editing && (
+        <>
+          <div
+            data-delete="1"
+            title="Delete text box"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onDelete();
+            }}
+            style={{
+              position: "absolute",
+              top: -8,
+              right: -8,
+              height: 16,
+              width: 16,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              color: "#fff",
+              background: "var(--accent)",
+              borderRadius: "50%",
+              fontSize: 12,
+              lineHeight: 1,
+              fontWeight: 700,
+              userSelect: "none",
+            }}
+          >
+            −
+          </div>
+          <div
+            data-resize="1"
+            title="Drag to resize"
+            onPointerDown={onStartResize}
+            style={{
+              position: "absolute",
+              right: -5,
+              bottom: -5,
+              height: 10,
+              width: 10,
+              cursor: "nwse-resize",
+              background: "var(--accent)",
+              borderRadius: 2,
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -65,6 +65,9 @@ export interface TextAnno extends Base {
   x: number;
   y: number;
   w: number;
+  // Minimum box height in PDF points (the size the user dragged/resized to). The box still
+  // grows taller to fit wrapped text. Undefined for click-placed/edit-tool boxes (pure auto-height).
+  h?: number;
   fontSize: number;
   text: string;
   // Font family copied from the original text when editing, so the replacement matches.
