@@ -47,6 +47,17 @@ export const IconText = (p: P) =>
   svg(<><rect x="2.5" y="3.5" width="19" height="17" rx="1.5" /><path d="M7.5 8.5h9" /><path d="M12 8.5V16" /></>, p.className);
 export const IconSquare = (p: P) => svg(<rect x="2.5" y="2.5" width="19" height="19" rx="2" />, p.className);
 export const IconCircle = (p: P) => svg(<circle cx="12" cy="12" r="9.5" />, p.className);
+// Fill: a paint bucket tipping with a drip — the "filled shapes" toggle.
+export const IconFill = (p: P) =>
+  svg(
+    <>
+      <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z" />
+      <path d="m5 2 5 5" />
+      <path d="M2 13h15" />
+      <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z" />
+    </>,
+    p.className
+  );
 // Freehand draw: the old marker-tip glyph.
 export const IconPen = (p: P) =>
   svg(<><path d="M12 3 6 9l5 5 6-6z" /><path d="M11 14 6 9l-2 5-1 4 4-1z" /><path d="M3 21h7" /></>, p.className);

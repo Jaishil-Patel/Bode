@@ -113,6 +113,9 @@ interface AnnotationState {
   selectedId: string | null;
   signatureDataUrl: string | null; // last drawn signature, reused for quick re-placement
   signaturePadOpen: boolean; // transient: whether the draw-a-signature modal is showing
+  // Transient: whether the tool-options pill (colour/thickness/fill) is showing. Opens when a
+  // tool is picked or an annotation is selected; closes once the tool is used (an annotation added).
+  optionsOpen: boolean;
 
   // Undo/redo history of `byFile` snapshots (session-only, not persisted). Each entry is the
   // whole annotation map before a mutation, so undo/redo covers every edit across files.
@@ -123,6 +126,7 @@ interface AnnotationState {
   setTool: (t: Tool) => void;
   setColor: (c: string) => void;
   setStrokeWidth: (w: number) => void;
+  setFontSize: (s: number) => void;
   setFillShapes: (v: boolean) => void;
   setFillOpacity: (v: number) => void;
   setHighlightPreset: (i: number, c: string) => void;
@@ -130,6 +134,7 @@ interface AnnotationState {
   setSelected: (id: string | null) => void;
   setSignatureDataUrl: (url: string | null) => void;
   setSignaturePadOpen: (open: boolean) => void;
+  setOptionsOpen: (open: boolean) => void;
 
   add: (file: string, anno: Annotation) => void;
   update: (file: string, id: string, patch: Partial<Annotation>) => void;
@@ -235,6 +240,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     selectedId: null,
     signatureDataUrl: null,
     signaturePadOpen: false,
+    optionsOpen: false,
     past: [],
     future: [],
 
@@ -264,7 +270,8 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       }
     },
 
-    setTool: (t) => set({ tool: t, selectedId: t === "select" ? get().selectedId : null }),
+    setTool: (t) =>
+      set({ tool: t, selectedId: t === "select" ? get().selectedId : null, optionsOpen: true }),
     setColor: (c) => {
       set({ color: c });
       // Recolor the current selection if it isn't a highlight.
@@ -279,6 +286,19 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     },
     setStrokeWidth: (w) => {
       set({ strokeWidth: w });
+      save();
+    },
+    setFontSize: (s) => {
+      set({ fontSize: s });
+      // Resize the selected text box too, so the control edits the box you're looking at.
+      const { selectedId, byFile } = get();
+      if (selectedId) {
+        for (const [file, list] of Object.entries(byFile)) {
+          const a = list.find((x) => x.id === selectedId);
+          if (a && a.type === "text")
+            get().update(file, selectedId, { fontSize: s } as Partial<Annotation>);
+        }
+      }
       save();
     },
     setFillShapes: (v) => {
@@ -321,12 +341,14 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       save();
     },
     setActivePreset: (i) => set({ activePreset: i }),
-    setSelected: (id) => set({ selectedId: id }),
+    // Selecting an annotation opens its options pill so its colour/thickness/fill can be edited.
+    setSelected: (id) => set(id ? { selectedId: id, optionsOpen: true } : { selectedId: id }),
     setSignatureDataUrl: (url) => {
       set({ signatureDataUrl: url });
       save();
     },
     setSignaturePadOpen: (open) => set({ signaturePadOpen: open }),
+    setOptionsOpen: (open) => set({ optionsOpen: open }),
 
     add: (file, anno) => {
       pushHistory();
@@ -334,6 +356,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       set((st) => ({
         byFile: { ...st.byFile, [file]: [...(st.byFile[file] ?? []), anno] },
         selectedId: anno.id,
+        optionsOpen: false, // the tool was just used — collapse its options pill
       }));
       save();
     },

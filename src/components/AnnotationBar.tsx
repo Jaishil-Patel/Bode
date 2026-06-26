@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import { useAnnotations } from "../annotations/useAnnotations";
@@ -8,6 +8,7 @@ import {
   IconText,
   IconSquare,
   IconCircle,
+  IconFill,
   IconPen,
   IconEdit,
   IconSignature,
@@ -47,6 +48,90 @@ function ToolBtn({
   );
 }
 
+/** A compact, typeable font-size field with −/+ steppers and arrow-key support. Lays out as a
+ *  tall capsule (+ above, − below) when `vertical`, matching a side-docked tools bar. */
+function FontSizeField({
+  value,
+  onChange,
+  min,
+  max,
+  vertical,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  min: number;
+  max: number;
+  vertical: boolean;
+}) {
+  const [text, setText] = useState(String(Math.round(value)));
+  const focused = useRef(false);
+  // Reflect external changes (e.g. selecting another box) unless the user is mid-edit.
+  useEffect(() => {
+    if (!focused.current) setText(String(Math.round(value)));
+  }, [value]);
+
+  const clamp = (n: number) => Math.min(max, Math.max(min, n));
+  const step = (delta: number) => onChange(clamp(Math.round(value) + delta));
+
+  const btnCls = `flex items-center justify-center text-base leading-none text-muted transition-colors hover:bg-white/10 hover:text-text ${
+    vertical ? "h-6 w-full" : "h-full w-6"
+  }`;
+  const minus = (
+    <button className={btnCls} title="Smaller" onClick={() => step(-1)}>
+      −
+    </button>
+  );
+  const plus = (
+    <button className={btnCls} title="Larger" onClick={() => step(1)}>
+      +
+    </button>
+  );
+
+  return (
+    <div
+      className={`flex shrink-0 items-center overflow-hidden rounded-full border border-white/15 bg-black/10 ${
+        vertical ? "w-8 flex-col" : "h-7"
+      }`}
+      title="Font size (points)"
+    >
+      {vertical ? plus : minus}
+      <input
+        type="text"
+        inputMode="numeric"
+        value={text}
+        onFocus={(e) => {
+          focused.current = true;
+          e.currentTarget.select();
+        }}
+        onChange={(e) => {
+          const v = e.target.value.replace(/[^\d]/g, "").slice(0, 3);
+          setText(v);
+          const n = parseInt(v, 10);
+          if (Number.isFinite(n) && n >= min) onChange(clamp(n));
+        }}
+        onBlur={() => {
+          focused.current = false;
+          setText(String(Math.round(value)));
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            step(1);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            step(-1);
+          }
+        }}
+        className={`bg-transparent text-center text-xs font-medium tabular-nums text-text outline-none ${
+          vertical ? "h-6 w-full" : "h-full w-7"
+        }`}
+      />
+      {vertical ? minus : plus}
+    </div>
+  );
+}
+
 /** Nearest screen edge to the pointer, for drag-to-dock. */
 function edgeAt(x: number, y: number): Side {
   const w = window.innerWidth;
@@ -64,15 +149,18 @@ export default function AnnotationBar() {
     tool,
     color,
     strokeWidth,
+    fontSize,
     fillShapes,
     fillOpacity,
     highlightPresets,
     activePreset,
     selectedId,
+    optionsOpen,
     byFile,
     setTool,
     setColor,
     setStrokeWidth,
+    setFontSize,
     setFillShapes,
     setFillOpacity,
     setHighlightPreset,
@@ -114,8 +202,12 @@ export default function AnnotationBar() {
   // a selected shape. This keeps the bar uncluttered the rest of the time.
   const selectedAnno = filePath ? (byFile[filePath] ?? []).find((a) => a.id === selectedId) : undefined;
   const selectedIsShape = selectedAnno?.type === "rect" || selectedAnno?.type === "ellipse";
+  const selectedText = selectedAnno?.type === "text" ? selectedAnno : undefined;
   const penContext = tool === "pen" || selectedAnno?.type === "pen";
   const shapeContext = tool === "rect" || tool === "ellipse" || selectedIsShape;
+  const textContext = tool === "text" || !!selectedText;
+  // Show the selected box's own size when one is selected, otherwise the tool default.
+  const effectiveFontSize = selectedText ? selectedText.fontSize : fontSize;
 
   const Divider = () =>
     vertical ? (
@@ -124,30 +216,76 @@ export default function AnnotationBar() {
       <div className="mx-1 h-5 w-px shrink-0 bg-border opacity-70" />
     );
 
+  // A range slider that turns vertical (rotated 90°) when the bar is docked left/right, so the
+  // options pill stacks like the bar. Rotation preserves the custom track/thumb styling and the
+  // fill grows upward, which reads correctly for a vertical slider.
+  const slider = (props: {
+    min: number;
+    max: number;
+    value: number;
+    onChange: (v: number) => void;
+    title: string;
+    lenClass: string; // horizontal length, e.g. "w-16"
+    boxClass: string; // vertical box height to fit the rotated slider, e.g. "h-16"
+    val: number; // fill percentage 0..100
+  }) => {
+    const input = (
+      <input
+        type="range"
+        min={props.min}
+        max={props.max}
+        value={props.value}
+        title={props.title}
+        onChange={(e) => props.onChange(Number(e.target.value))}
+        className={`bode-range shrink-0 ${props.lenClass} ${vertical ? "-rotate-90" : ""}`}
+        style={{ "--val": `${props.val}%` } as React.CSSProperties}
+      />
+    );
+    return vertical ? (
+      <div className={`flex w-5 shrink-0 items-center justify-center ${props.boxClass}`}>{input}</div>
+    ) : (
+      input
+    );
+  };
+
+  // Colour swatch, reused by the pen/shape and text option groups.
+  const colorSwatch = (
+    <label
+      title="Colour for text & shapes"
+      className="relative h-7 w-7 shrink-0 cursor-pointer overflow-hidden rounded-full border-2 border-white/30 shadow-inner"
+      style={{ background: color }}
+    >
+      <input
+        type="color"
+        value={color}
+        onChange={(e) => setColor(e.target.value)}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+      />
+    </label>
+  );
+
   // Shared colour swatch + line-thickness slider, rendered next to whichever tool needs it.
   const colorThickness = (
     <>
-      <label
-        title="Colour for text & shapes"
-        className="relative h-7 w-7 shrink-0 cursor-pointer overflow-hidden rounded-full border-2 border-white/30 shadow-inner"
-        style={{ background: color }}
-      >
-        <input
-          type="color"
-          value={color}
-          onChange={(e) => setColor(e.target.value)}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-        />
-      </label>
-      <input
-        type="range"
-        min={1}
-        max={12}
-        value={strokeWidth}
-        title="Line thickness"
-        onChange={(e) => setStrokeWidth(Number(e.target.value))}
-        className="w-16 shrink-0 accent-[var(--accent)]"
-      />
+      {colorSwatch}
+      {slider({
+        min: 1,
+        max: 12,
+        value: strokeWidth,
+        onChange: setStrokeWidth,
+        title: "Line thickness",
+        lenClass: "w-16",
+        boxClass: "h-16",
+        val: ((strokeWidth - 1) / 11) * 100,
+      })}
+    </>
+  );
+
+  // Colour swatch + typeable font-size field for text boxes (active text tool or selected box).
+  const fontControls = (
+    <>
+      {colorSwatch}
+      <FontSizeField value={effectiveFontSize} onChange={setFontSize} min={4} max={200} vertical={vertical} />
     </>
   );
 
@@ -155,30 +293,31 @@ export default function AnnotationBar() {
   const fillControls = (
     <>
       <button
-        title="Toggle filled shapes"
+        title={fillShapes ? "Filled shapes: on" : "Filled shapes: off"}
         onClick={() => setFillShapes(!fillShapes)}
         style={fillShapes ? { background: ACTIVE_BG } : undefined}
-        className={`flex h-9 shrink-0 items-center gap-1.5 rounded-full px-2.5 transition-colors ${
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
           fillShapes ? "text-accent" : "text-muted hover:bg-white/10"
         }`}
       >
-        <span
-          className="h-3.5 w-3.5 rounded-[4px] border-2"
-          style={{ borderColor: "currentColor", background: fillShapes ? "currentColor" : "transparent" }}
-        />
-        <span className="text-xs font-medium">Fill</span>
+        <IconFill />
       </button>
       {fillShapes && (
-        <label className="flex shrink-0 items-center gap-1 text-xs text-muted" title="Fill opacity">
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.round(fillOpacity * 100)}
-            onChange={(e) => setFillOpacity(Number(e.target.value) / 100)}
-            className="w-14 accent-[var(--accent)]"
-          />
-          <span className="w-8 text-right tabular-nums">{Math.round(fillOpacity * 100)}%</span>
+        <label
+          className={`flex shrink-0 items-center gap-1 text-xs ${vertical ? "flex-col" : "gap-2"}`}
+          title="Fill opacity"
+        >
+          {slider({
+            min: 0,
+            max: 100,
+            value: Math.round(fillOpacity * 100),
+            onChange: (v) => setFillOpacity(v / 100),
+            title: "Fill opacity",
+            lenClass: "w-20",
+            boxClass: "h-20",
+            val: Math.round(fillOpacity * 100),
+          })}
+          <span className="w-8 text-center tabular-nums text-text">{Math.round(fillOpacity * 100)}%</span>
         </label>
       )}
     </>
@@ -194,16 +333,47 @@ export default function AnnotationBar() {
       ? { left: "0.75rem", top: "50%", transform: "translateY(-50%)" }
       : { right: "0.75rem", top: "50%", transform: "translateY(-50%)" };
 
+  const glass =
+    "rounded-full border border-white/15 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150";
+  const surfaceBg = { background: "color-mix(in srgb, var(--surface) 42%, transparent)" };
   const containerCls = vertical
-    ? "no-select fixed z-40 flex max-h-[calc(100vh-2rem)] flex-col items-center gap-1 overflow-y-auto rounded-full border border-white/15 px-1.5 py-2.5 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150"
-    : "no-select fixed z-40 flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto rounded-full border border-white/15 px-2.5 py-1.5 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150";
+    ? `no-select flex max-h-[calc(100vh-2rem)] flex-col items-center gap-1 overflow-y-auto px-1.5 py-2.5 ${glass}`
+    : `no-select flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 ${glass}`;
+
+  // The tool-options pill (colour/thickness/fill) floats just off the bar's page-facing side. It
+  // shows when a drawing tool is freshly picked (or a shape/pen is selected) and collapses once
+  // the tool is used — keeping the bar itself a fixed size.
+  const showPill = optionsOpen && (penContext || shapeContext || textContext);
+  const pillFirst = side === "bottom" || side === "right"; // order so the pill sits toward the page
+  const optionsPill = showPill ? (
+    <div
+      className={`no-select pointer-events-auto flex items-center gap-2 ${glass} ${
+        vertical ? "flex-col px-2 py-3" : "px-3 py-1.5"
+      }`}
+      style={surfaceBg}
+    >
+      {textContext ? (
+        fontControls
+      ) : (
+        <>
+          {colorThickness}
+          {shapeContext && fillControls}
+        </>
+      )}
+    </div>
+  ) : null;
 
   return (
     <>
+      {/* The wrapper only positions the bar + pill; it stays click-through so its empty area
+          (the gap and the space beside the centred pill) never blocks drawing on the page —
+          only the bar and pill themselves capture pointer events. */}
       <div
-        className={containerCls}
-        style={{ ...posStyle, background: "color-mix(in srgb, var(--surface) 42%, transparent)" }}
+        className={`no-select pointer-events-none fixed z-40 flex items-center gap-2 ${vertical ? "flex-row" : "flex-col"}`}
+        style={posStyle}
       >
+        {pillFirst && optionsPill}
+        <div className={`${containerCls} pointer-events-auto`} style={surfaceBg}>
         <button
           title="Drag to move the tools bar to another edge"
           onPointerDown={startDrag}
@@ -254,11 +424,10 @@ export default function AnnotationBar() {
 
         <Divider />
 
-        {/* Pencil — colour & thickness appear only while it's the active/selected tool */}
+        {/* Pencil — colour & thickness appear in the floating options pill (see below) */}
         <ToolBtn active={tool === "pen"} title="Freehand draw (P)" onClick={() => setTool("pen")}>
           <IconPen />
         </ToolBtn>
-        {penContext && colorThickness}
 
         <ToolBtn active={tool === "eraser"} title="Eraser — click or drag to remove (X)" onClick={() => setTool("eraser")}>
           <IconEraser />
@@ -268,19 +437,13 @@ export default function AnnotationBar() {
           <IconText />
         </ToolBtn>
 
-        {/* Shapes — colour, thickness & fill appear only in the shape context */}
+        {/* Shapes — colour, thickness & fill appear in the floating options pill (see below) */}
         <ToolBtn active={tool === "rect"} title="Rectangle (R)" onClick={() => setTool("rect")}>
           <IconSquare />
         </ToolBtn>
         <ToolBtn active={tool === "ellipse"} title="Ellipse (O)" onClick={() => setTool("ellipse")}>
           <IconCircle />
         </ToolBtn>
-        {shapeContext && (
-          <>
-            {colorThickness}
-            {fillControls}
-          </>
-        )}
 
         <Divider />
 
@@ -322,6 +485,8 @@ export default function AnnotationBar() {
         >
           <IconChevronDown />
         </button>
+        </div>
+        {!pillFirst && optionsPill}
       </div>
 
       {/* Drag feedback: highlight the edge the bar will snap to on release. */}

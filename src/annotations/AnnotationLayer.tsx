@@ -117,10 +117,12 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale };
   };
 
-  // Remove the topmost annotation under the eraser at point `p` (one per call).
+  // Remove the topmost annotation under the eraser at point `p` (one per call). Text boxes are
+  // immune — the eraser passes through them and removes the next thing underneath instead.
   const eraseAt = (p: { x: number; y: number }) => {
     const tol = 5 / scale; // ~5px hit slop regardless of zoom
     for (let i = pageAnnos.length - 1; i >= 0; i--) {
+      if (pageAnnos[i].type === "text") continue;
       if (eraserHits(pageAnnos[i], p.x, p.y, tol)) {
         remove(filePath, pageAnnos[i].id);
         break;
@@ -134,6 +136,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     e.preventDefault();
     const p = toPdf(e);
     const color = activeColor();
+    erasing.current = false; // any prior erase stroke is over; the eraser branch re-arms it below
 
     if (tool === "eraser") {
       (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -343,6 +346,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   };
 
   const onPointerUp = () => {
+    erasing.current = false; // end an erase stroke (the eraser never sets a draft)
     if (!draft) return;
     if (draft.type === "text") {
       const t = draft as TextAnno & { h: number };
@@ -581,7 +585,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   return (
     <div
       ref={ref}
-      className="absolute inset-0"
+      className={`absolute inset-0 ${tool === "eraser" ? "cursor-eraser" : ""}`}
       style={{
         width,
         height,
@@ -589,7 +593,9 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         // Only capture pointer events for drag-drawing tools. Highlight & select stay
         // click-through so the text layer beneath can be selected.
         pointerEvents: captureTool ? "auto" : "none",
-        cursor: captureTool ? "crosshair" : "default",
+        // The eraser gets a real eraser-shaped cursor (via .cursor-eraser); other drawing tools
+        // use a crosshair. Leave cursor unset for the eraser so the class takes effect.
+        cursor: tool === "eraser" ? undefined : captureTool ? "crosshair" : "default",
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
