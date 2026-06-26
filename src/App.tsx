@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useViewer } from "./store/viewerStore";
 import { useSettings } from "./settings/useSettings";
 import { useAnnotations } from "./annotations/useAnnotations";
@@ -105,6 +106,15 @@ export default function App() {
         })
         .catch(() => {});
     }
+
+    // A PDF opened from the OS while Bode is already running arrives here: the single-instance
+    // plugin routes it to this window via an "open-file" event. openPath handles tabs vs windows.
+    const unlistenP = listen<string>("open-file", (e) => {
+      if (e.payload) openPath(e.payload);
+    });
+    return () => {
+      unlistenP.then((un) => un()).catch(() => {});
+    };
   }, [hydrate, openPath]);
 
   // Global keyboard shortcuts.

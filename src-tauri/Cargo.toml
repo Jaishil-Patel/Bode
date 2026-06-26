@@ -25,6 +25,10 @@ serde_json = "1"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
+# Desktop-only: single-instance has no mobile support and must stay out of the cdylib build.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+
 [profile.release]
 # Optimize for a small, fast binary — the whole point of choosing Tauri.
 panic = "abort"

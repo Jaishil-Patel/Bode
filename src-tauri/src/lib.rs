@@ -1,9 +1,18 @@
 use std::sync::Mutex;
 use tauri::{Manager, State};
+#[cfg(desktop)]
+use tauri::Emitter;
 
 /// Holds the file path the app was launched with (e.g. via "Open with" / file association).
 #[derive(Default)]
 struct LaunchFile(Mutex<Option<String>>);
+
+/// First CLI/argv entry that looks like a real, openable path (skipping flags). The caller is
+/// responsible for dropping argv[0] (the program path) first.
+fn first_existing_path<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    args.into_iter()
+        .find(|a| !a.starts_with('-') && std::path::Path::new(a).exists())
+}
 
 /// Read a file's raw bytes. Used by the frontend to hand PDF data to PDF.js.
 /// A dedicated command avoids wiring broad filesystem-scope permissions for arbitrary paths.
@@ -73,12 +82,34 @@ fn set_titlebar_color(window: tauri::WebviewWindow, r: u8, g: u8, b: u8, tr: u8,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // First CLI arg that looks like a real path is treated as a file to open.
-    let launch_path = std::env::args()
-        .skip(1)
-        .find(|a| !a.starts_with('-') && std::path::Path::new(a).exists());
+    // First CLI arg that looks like a real path is treated as a file to open (cold start).
+    let launch_path = first_existing_path(std::env::args().skip(1));
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Single-instance must be registered before any other plugin. When the OS launches Bode
+    // again (e.g. opening a PDF while it's already running), this fires in the EXISTING process
+    // with the new argv and the second process exits — so the file lands in the open window
+    // instead of spawning another one. Desktop-only (no mobile support).
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        let path = first_existing_path(argv.into_iter().skip(1)); // argv[0] is the exe path
+        // Bring an existing window forward — prefer "main", else any surviving window (in
+        // "windows" open-mode the original "main" may have been closed).
+        let target = app
+            .get_webview_window("main")
+            .or_else(|| app.webview_windows().into_values().next());
+        if let Some(win) = target {
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+            // Emit to exactly ONE window; app.emit() would broadcast and double-open the file.
+            if let Some(p) = path {
+                let _ = win.emit("open-file", p);
+            }
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
