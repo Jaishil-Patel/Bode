@@ -20,10 +20,21 @@ export async function readPdfBytes(path: string): Promise<Uint8Array> {
   return raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
 }
 
+/** Read a text file (e.g. Markdown) as a UTF-8 string, via the same path-or-content-URI plumbing. */
+export async function readTextFile(path: string): Promise<string> {
+  const bytes = await readPdfBytes(path);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 export async function writePdfBytes(path: string, bytes: Uint8Array): Promise<void> {
   if (isAndroid()) {
     await writeFile(path, bytes);
     return;
   }
   await invoke("write_file_bytes", { path, bytes: Array.from(bytes) });
+}
+
+/** Write a string back to a text file (e.g. saving an edited Markdown file) as UTF-8. */
+export async function writeTextFile(path: string, text: string): Promise<void> {
+  await writePdfBytes(path, new TextEncoder().encode(text));
 }

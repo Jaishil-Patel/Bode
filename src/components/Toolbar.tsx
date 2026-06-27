@@ -14,6 +14,7 @@ import {
   IconUndo,
   IconRedo,
   IconSettings,
+  IconPen,
 } from "./icons";
 
 function Btn({
@@ -62,6 +63,11 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
   const { layout, toggleSidebar } = useSettings();
   const filePath = useViewer((s) => s.filePath);
   const search = useViewer((s) => s.search);
+  const isMd = useViewer((s) => s.mdSource != null);
+  const mdEditing = useViewer((s) => s.mdEditing);
+  const mdDirty = useViewer((s) => s.mdDirty);
+  const toggleMdEdit = useViewer((s) => s.toggleMdEdit);
+  const saveMd = useViewer((s) => s.saveMd);
   const byFile = useAnnotations((s) => s.byFile);
   const canUndo = useAnnotations((s) => s.past.length > 0);
   const canRedo = useAnnotations((s) => s.future.length > 0);
@@ -131,8 +137,27 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
       )}
 
       <div className="min-w-0 flex-1 truncate px-3 text-center text-sm text-muted">
-        <span className="hidden sm:inline">{fileName ?? "Bode"}</span>
+        <span className="hidden sm:inline">
+          {fileName ?? "Bode"}
+          {isMd && mdDirty && <span title="Unsaved changes" className="text-accent"> •</span>}
+        </span>
       </div>
+
+      {isMd && (
+        <>
+          <Btn
+            title={mdEditing ? "Done editing (preview)" : "Edit Markdown (Ctrl+E)"}
+            onClick={() => toggleMdEdit()}
+            active={mdEditing}
+          >
+            <IconPen />
+          </Btn>
+          <Btn title="Save (Ctrl+S)" onClick={saveMd} disabled={!mdDirty}>
+            <IconSave />
+          </Btn>
+          <div className="mx-1 h-6 w-px bg-border" />
+        </>
+      )}
 
       {doc && (
         <>

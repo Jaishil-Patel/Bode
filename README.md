@@ -2,7 +2,7 @@
 
 Do you hate the ads and bloating some other pdf apps have, I've got the perfect alternative for you ;).
 
-A clean, fast, customizable PDF reader **and** annotator that runs on desktop (Windows/macOS/Linux) and Android — built with Tauri + React.
+A clean, fast, customizable PDF reader **and** annotator — that also opens and edits Markdown — running on desktop (Windows/macOS/Linux) and Android, built with Tauri + React.
 
 **Bode is free and open source.** Contributions are welcome — whether that's fixing a bug, adding a feature, improving the docs, or just opening an issue with an idea. See [Contributing](#contributing) below to get started.
 
@@ -31,6 +31,13 @@ A clean, fast, customizable PDF reader **and** annotator that runs on desktop (W
 - **Undo / redo** — full history of every change (`Ctrl+Z` / `Ctrl+Shift+Z`).
 - **Save** — flatten all annotations into a brand-new PDF via a save dialog (the original is
   never modified). Powered by `pdf-lib`.
+
+### Markdown
+- **Read Markdown** — open any `.md` / `.markdown` file (file-association, "Open with", or the
+  open dialog) and read it as a clean, reflowed document that follows your active theme.
+- **Edit & save** — toggle into a source editor (`Ctrl+E`), make changes with live preview on
+  toggle-back, and save straight to the original file (`Ctrl+S`). External links open in your
+  browser, not in the app.
 
 ### Platforms
 - **Desktop** — Windows, macOS, Linux.
@@ -72,7 +79,9 @@ Install a built APK on a connected phone with `adb install -r <path-to.apk>`.
 
 | Action | Shortcut |
 | --- | --- |
-| Open PDF | `Ctrl+O` |
+| Open file (PDF or Markdown) | `Ctrl+O` |
+| Edit / preview Markdown | `Ctrl+E` |
+| Save Markdown | `Ctrl+S` |
 | Find in document | `Ctrl+F` |
 | Command palette | `Ctrl+K` |
 | Toggle sidebar | `Ctrl+B` |
@@ -89,6 +98,7 @@ Install a built APK on a connected phone with `adb install -r <path-to.apk>`.
 ```
 src/                 React frontend
   pdf/               PDF.js worker, document loader, page renderer, viewer, search, PDF export
+  markdown/          Markdown rendering (markdown-it) + reflowed reader / source editor view
   annotations/       annotation data model (Zustand) + overlay rendering/editing layer
   components/        Toolbar, AnnotationBar, Sidebar, SearchBar, CommandPalette, SignaturePad, icons
   platform/          cross-platform file I/O (desktop commands vs Android plugin-fs)
@@ -102,7 +112,11 @@ src-tauri/           Rust shell (file reading/writing, launch-file handling, plu
 ## Architecture notes
 
 - PDF.js runs entirely in the webview; Rust is a thin native shell (file dialogs, reading/writing
-  bytes, persistence, `.pdf` file association). This keeps the text layer free.
+  bytes, persistence, `.pdf`/`.md` file associations). This keeps the text layer free.
+- **Markdown is a separate tab kind** alongside PDFs: the file is rendered to HTML with
+  `markdown-it` (`html: false`, so raw HTML is escaped — safe to render under the strict CSP with
+  no extra sanitizer) and shown in a reflowed reading view, or edited as plain source and written
+  back to disk. PDF-only chrome (page nav, search, annotations) is gated off for Markdown tabs.
 - **Annotations are an overlay model.** Highlights, pen, shapes, text, edits and signatures are
   stored as scale-independent geometry (PDF points) in `annotations.json` and rendered over the
   page. They're only baked into the file on **Save**, which flattens them into a new PDF with

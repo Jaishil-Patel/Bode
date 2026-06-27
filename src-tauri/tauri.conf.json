@@ -42,6 +42,12 @@
         "name": "PDF Document",
         "description": "Portable Document Format",
         "role": "Viewer"
+      },
+      {
+        "ext": ["md", "markdown"],
+        "name": "Markdown Document",
+        "description": "Markdown text document",
+        "role": "Viewer"
       }
     ]
   },

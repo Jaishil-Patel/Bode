@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { readPdfBytes } from "../platform/files";
+import { readPdfBytes, readTextFile, writeTextFile } from "../platform/files";
 import { openInNewWindow } from "../platform/window";
+import { renderMarkdown } from "../markdown/renderMarkdown";
 import { loadPdfFromBytes, getOutline, type OutlineItem } from "../pdf/usePdfDocument";
 import { searchDocument, type SearchMatch } from "../pdf/search";
 import type { PdfDocument } from "../pdf/pdfWorker";
@@ -22,15 +23,31 @@ interface ScrollTarget {
   nonce: number; // changes every request so the viewer re-reacts
 }
 
+/** What kind of document a tab holds. PDFs go through PDF.js; Markdown is a reflowed reading view. */
+export type DocKind = "pdf" | "md";
+
 /** Lightweight tab descriptor shown in the tab strip. */
 export interface TabMeta {
   id: string;
   filePath: string;
   fileName: string;
+  kind: DocKind;
 }
+
+const MD_EXTS = ["md", "markdown", "mdown", "mkd", "markdn"];
+const kindForPath = (path: string): DocKind =>
+  MD_EXTS.includes(path.split(".").pop()?.toLowerCase() ?? "") ? "md" : "pdf";
 
 interface ViewerState {
   doc: PdfDocument | null;
+  /** Rendered HTML for a Markdown tab (null for PDF tabs). Drives the reflowed reading view. */
+  mdHtml: string | null;
+  /** Raw Markdown source for a Markdown tab (null for PDF tabs). Edited in the source editor. */
+  mdSource: string | null;
+  /** True while a Markdown tab shows the source editor instead of the rendered preview. */
+  mdEditing: boolean;
+  /** True when the Markdown source has unsaved edits. */
+  mdDirty: boolean;
   fileName: string | null;
   filePath: string | null;
   numPages: number;
@@ -60,6 +77,10 @@ interface ViewerState {
   closeTab: (id: string) => void;
   close: () => void;
 
+  toggleMdEdit: (on?: boolean) => void;
+  setMdSource: (text: string) => void;
+  saveMd: () => Promise<void>;
+
   setFitMode: (m: FitMode) => void;
   zoomIn: () => void;
   zoomOut: () => void;
@@ -87,6 +108,10 @@ let searchToken = 0;
 type TabSnapshot = Pick<
   ViewerState,
   | "doc"
+  | "mdHtml"
+  | "mdSource"
+  | "mdEditing"
+  | "mdDirty"
   | "fileName"
   | "filePath"
   | "numPages"
@@ -106,7 +131,7 @@ const newTabId = () =>
     ? crypto.randomUUID()
     : `t_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-const baseName = (path: string) => path.split(/[\\/]/).pop() ?? "document.pdf";
+const baseName = (path: string) => path.split(/[\\/]/).pop() ?? "document";
 const emptySearch = (): SearchState => ({ open: false, query: "", busy: false, matches: [], current: -1 });
 
 /** Snapshot the currently-active tab's live state so it can be restored later. */
@@ -114,6 +139,10 @@ function captureActive(get: () => ViewerState): TabSnapshot {
   const s = get();
   return {
     doc: s.doc,
+    mdHtml: s.mdHtml,
+    mdSource: s.mdSource,
+    mdEditing: s.mdEditing,
+    mdDirty: s.mdDirty,
     fileName: s.fileName,
     filePath: s.filePath,
     numPages: s.numPages,
@@ -130,6 +159,10 @@ function captureActive(get: () => ViewerState): TabSnapshot {
 
 const EMPTY_DOC_STATE = {
   doc: null,
+  mdHtml: null as string | null,
+  mdSource: null as string | null,
+  mdEditing: false,
+  mdDirty: false,
   fileName: null,
   filePath: null,
   numPages: 0,
@@ -142,8 +175,66 @@ const EMPTY_DOC_STATE = {
   scrollTarget: null as ScrollTarget | null,
 };
 
+/** Load a PDF into a tab snapshot via PDF.js, restoring the last-read page if there is one. */
+async function loadPdfTab(path: string, name: string): Promise<TabSnapshot> {
+  const data = await readPdfBytes(path);
+  const doc = await loadPdfFromBytes(data);
+  const first = await doc.getPage(1);
+  const vp = first.getViewport({ scale: 1 });
+  const outline = await getOutline(doc).catch(() => []);
+
+  const last = useSettings.getState().lastPositions[path];
+  const startPage = last && last.page > 1 ? last.page : 1;
+
+  return {
+    doc,
+    mdHtml: null,
+    mdSource: null,
+    mdEditing: false,
+    mdDirty: false,
+    fileName: name,
+    filePath: path,
+    numPages: doc.numPages,
+    baseSize: { width: vp.width, height: vp.height },
+    outline,
+    currentPage: 1,
+    fitMode: "width",
+    customScale: 1,
+    scale: 1,
+    search: emptySearch(),
+    scrollTarget: startPage > 1 ? { page: startPage, nonce: Date.now() } : null,
+  };
+}
+
+/** Read a Markdown file and render it to HTML for the reflowed reading view. */
+async function loadMarkdownTab(path: string, name: string): Promise<TabSnapshot> {
+  const source = await readTextFile(path);
+  return {
+    doc: null,
+    mdHtml: renderMarkdown(source),
+    mdSource: source,
+    mdEditing: false,
+    mdDirty: false,
+    fileName: name,
+    filePath: path,
+    numPages: 0,
+    baseSize: { width: 612, height: 792 },
+    outline: [],
+    currentPage: 1,
+    fitMode: "width",
+    customScale: 1,
+    scale: 1,
+    search: emptySearch(),
+    scrollTarget: null,
+  };
+}
+
 export const useViewer = create<ViewerState>((set, get) => ({
   doc: null,
+  mdHtml: null,
+  mdSource: null,
+  mdEditing: false,
+  mdDirty: false,
   fileName: null,
   filePath: null,
   numPages: 0,
@@ -167,7 +258,11 @@ export const useViewer = create<ViewerState>((set, get) => ({
   openWithDialog: async () => {
     const selected = await openDialog({
       multiple: true,
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
+      filters: [
+        { name: "Documents", extensions: ["pdf", "md", "markdown"] },
+        { name: "PDF", extensions: ["pdf"] },
+        { name: "Markdown", extensions: ["md", "markdown"] },
+      ],
     });
     const paths = Array.isArray(selected) ? selected : typeof selected === "string" ? [selected] : [];
     for (const p of paths) await get().openPath(p);
@@ -184,7 +279,7 @@ export const useViewer = create<ViewerState>((set, get) => ({
     }
 
     // Separate-windows mode: once this window has a document, send further files to new windows.
-    if (layout.openMode === "windows" && get().doc) {
+    if (layout.openMode === "windows" && (get().doc || get().mdHtml)) {
       if (await openInNewWindow(path)) return;
       // If a new window couldn't be created, fall through and open as a tab instead.
     }
@@ -194,8 +289,9 @@ export const useViewer = create<ViewerState>((set, get) => ({
     if (outgoing) tabStates.set(outgoing, captureActive(get));
     const id = newTabId();
     const name = baseName(path);
+    const kind = kindForPath(path);
     set({
-      tabs: [...get().tabs, { id, filePath: path, fileName: name }],
+      tabs: [...get().tabs, { id, filePath: path, fileName: name, kind }],
       activeTabId: id,
       ...EMPTY_DOC_STATE,
       fileName: name,
@@ -204,31 +300,9 @@ export const useViewer = create<ViewerState>((set, get) => ({
     });
 
     try {
-      const data = await readPdfBytes(path);
-      const doc = await loadPdfFromBytes(data);
-      const first = await doc.getPage(1);
-      const vp = first.getViewport({ scale: 1 });
-      const outline = await getOutline(doc).catch(() => []);
-
-      const settings = useSettings.getState();
-      settings.addRecent(path, name);
-      const last = settings.lastPositions[path];
-      const startPage = last && last.page > 1 ? last.page : 1;
-
-      const loaded: TabSnapshot = {
-        doc,
-        fileName: name,
-        filePath: path,
-        numPages: doc.numPages,
-        baseSize: { width: vp.width, height: vp.height },
-        outline,
-        currentPage: 1,
-        fitMode: "width",
-        customScale: 1,
-        scale: 1,
-        search: emptySearch(),
-        scrollTarget: startPage > 1 ? { page: startPage, nonce: Date.now() } : null,
-      };
+      const loaded: TabSnapshot =
+        kind === "md" ? await loadMarkdownTab(path, name) : await loadPdfTab(path, name);
+      useSettings.getState().addRecent(path, name);
       tabStates.set(id, loaded);
       // The user may have switched away while this loaded; only publish if still active.
       if (get().activeTabId === id) set({ ...loaded, loading: false, error: null });
@@ -287,6 +361,29 @@ export const useViewer = create<ViewerState>((set, get) => ({
   close: () => {
     const id = get().activeTabId;
     if (id) get().closeTab(id);
+  },
+
+  toggleMdEdit: (on) => {
+    if (get().mdSource == null) return; // not a Markdown tab
+    const next = on ?? !get().mdEditing;
+    // Leaving the editor: re-render the preview from the (possibly edited) source.
+    if (!next && get().mdEditing) set({ mdHtml: renderMarkdown(get().mdSource ?? "") });
+    set({ mdEditing: next });
+  },
+  setMdSource: (text) => {
+    if (get().mdSource == null) return;
+    set({ mdSource: text, mdDirty: true });
+  },
+  saveMd: async () => {
+    const { filePath, mdSource, mdDirty } = get();
+    if (!filePath || mdSource == null || !mdDirty) return;
+    try {
+      await writeTextFile(filePath, mdSource);
+      // Refresh the preview to match exactly what's now on disk, and clear the dirty flag.
+      set({ mdDirty: false, mdHtml: renderMarkdown(mdSource) });
+    } catch (e) {
+      set({ error: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
   },
 
   setFitMode: (m) => set({ fitMode: m }),
