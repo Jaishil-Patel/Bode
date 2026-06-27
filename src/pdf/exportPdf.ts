@@ -82,9 +82,19 @@ function wrapLines(text: string, font: PDFFont, fontSize: number, maxWidth: numb
   return out;
 }
 
-async function dataUrlToBytes(dataUrl: string): Promise<Uint8Array> {
-  const res = await fetch(dataUrl);
-  return new Uint8Array(await res.arrayBuffer());
+/*
+ * Decode a data: URL to bytes WITHOUT fetch(). In the packaged build the CSP's connect-src
+ * doesn't allow the data: scheme, so `fetch(dataUrl)` is blocked and throws "Failed to fetch" —
+ * which surfaced as a save failure when flattening a signature. Decoding inline sidesteps that.
+ */
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const comma = dataUrl.indexOf(",");
+  const meta = dataUrl.slice(0, comma);
+  const data = dataUrl.slice(comma + 1);
+  const binary = /;base64/i.test(meta) ? atob(data) : decodeURIComponent(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 /** Pick the standard font whose look matches the original text's family, so edits blend in. */
@@ -183,7 +193,7 @@ async function drawAnnotation(
       break;
     }
     case "signature": {
-      const png = await doc.embedPng(await dataUrlToBytes(a.dataUrl));
+      const png = await doc.embedPng(dataUrlToBytes(a.dataUrl));
       // Anchor at the image's display bottom-left, mapped to user space.
       const p = map.toUser(a.x, a.y + a.h);
       page.drawImage(png, { x: p.x, y: p.y, width: a.w, height: a.h, rotate: degrees(map.rotation) });
