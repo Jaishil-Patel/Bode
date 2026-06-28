@@ -44,6 +44,16 @@ body {
   background: transparent;
 }
 
+/* Opt-out for scroll containers (e.g. the floating tools bar) where a reserved scrollbar gutter
+   would make the rounded pill's padding look uneven. Still scrolls via swipe/drag. */
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
 /* ---- PDF.js text layer (selection + search highlights) ---- */
 .textLayer {
   position: absolute;

@@ -100,6 +100,17 @@ export default function App() {
     const fileParam = new URLSearchParams(window.location.search).get("file");
     if (fileParam) {
       openPath(decodeURIComponent(fileParam));
+    } else if (isAndroid()) {
+      // Android "Open with": MainActivity copies the shared PDF into the app cache and gives us
+      // the path. Warm starts push it via window.__bodeOpenFile; a cold start pulls the pending
+      // path now that the frontend is ready (the bridge is injected by MainActivity).
+      const w = window as typeof window & {
+        __bodeOpenFile?: (p: string) => void;
+        BodeAndroid?: { ready?: () => string | null };
+      };
+      w.__bodeOpenFile = (p) => openPath(p);
+      const launch = w.BodeAndroid?.ready?.();
+      if (launch) openPath(launch);
     } else {
       invoke<string | null>("take_launch_file")
         .then((p) => {

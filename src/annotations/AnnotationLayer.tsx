@@ -10,6 +10,8 @@ import {
   type Rect,
 } from "./useAnnotations";
 
+import { isAndroid } from "../platform/files";
+
 const EMPTY: Annotation[] = [];
 
 // Reused canvas for measuring text width (so the edit box can be sized to match the original).
@@ -202,11 +204,11 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   };
 
   // ---- Highlight by selecting text ----
-  // When the highlight tool is active, let the user select text normally; on mouse-up
-  // turn the selection's line rectangles into a highlight anchored to this page.
+  // When the highlight tool is active, let the user select text normally, then turn the
+  // selection's line rectangles into a highlight anchored to this page.
   useEffect(() => {
     if (tool !== "highlight") return;
-    const onUp = () => {
+    const commit = () => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
       const pageRect = ref.current?.getBoundingClientRect();
@@ -237,8 +239,30 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         sel.removeAllRanges();
       }
     };
-    document.addEventListener("mouseup", onUp);
-    return () => document.removeEventListener("mouseup", onUp);
+
+    // Desktop: a drag-select ends with a mouseup, so commit there.
+    // Android: finishing a selection (long-press + dragging the native selection handles) never
+    // fires mouseup — the handles aren't DOM elements — so the highlight used to only land when
+    // a later real click (e.g. tapping the toolbar) happened to fire mouseup while the selection
+    // was still live. Instead watch selectionchange and commit once the selection settles, so the
+    // highlight applies automatically the moment you let go.
+    if (!isAndroid()) {
+      document.addEventListener("mouseup", commit);
+      return () => document.removeEventListener("mouseup", commit);
+    }
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return; // ignore the collapse our own removeAllRanges causes
+      clearTimeout(settle);
+      // Wait for the user to stop adjusting the selection handles before committing.
+      settle = setTimeout(commit, 450);
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      clearTimeout(settle);
+      document.removeEventListener("selectionchange", onSelectionChange);
+    };
   }, [tool, scale, filePath, pageIndex, add, activeColor]);
 
   // ---- Edit existing text (whiteout + retype) ----
@@ -593,6 +617,13 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         // Only capture pointer events for drag-drawing tools. Highlight & select stay
         // click-through so the text layer beneath can be selected.
         pointerEvents: captureTool ? "auto" : "none",
+        // On touch devices the WebView otherwise claims the gesture for scrolling after a few
+        // pixels of movement, firing pointercancel and aborting it ("draws a small line then
+        // stops"; dragging a placed signature/text box jumps around). Opt out of native panning
+        // so the full pointermove stream reaches us. Unconditional because this overlay is the
+        // common ancestor of every draggable child (shapes, signatures, text boxes) and the
+        // browser intersects touch-action down the ancestor chain, covering select-mode drags too.
+        touchAction: "none",
         // The eraser gets a real eraser-shaped cursor (via .cursor-eraser); other drawing tools
         // use a crosshair. Leave cursor unset for the eraser so the class takes effect.
         cursor: tool === "eraser" ? undefined : captureTool ? "crosshair" : "default",
@@ -600,6 +631,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
     >
       <svg width={width} height={height} style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "visible" }}>
         {pageAnnos
@@ -663,6 +695,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
                 width: a.w * scale,
                 height: a.h * scale,
                 pointerEvents: annoPE,
+                touchAction: "none", // hold-and-drag on touch; don't let the WebView pan instead
                 cursor: tool === "select" ? "move" : "default",
                 outline: selected ? "1px dashed var(--accent)" : "none",
               }}
@@ -762,6 +795,7 @@ function TextBox({
         top: a.y * scale,
         width: a.w * scale,
         pointerEvents: pe,
+        touchAction: "none", // hold-and-drag on touch; don't let the WebView pan instead
         outline: selected ? "1px dashed var(--accent)" : "none",
         cursor: interactive && !editing ? "move" : "default",
       }}

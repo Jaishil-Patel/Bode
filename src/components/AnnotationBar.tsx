@@ -337,8 +337,8 @@ export default function AnnotationBar() {
     "rounded-full border border-white/15 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150";
   const surfaceBg = { background: "color-mix(in srgb, var(--surface) 42%, transparent)" };
   const containerCls = vertical
-    ? `no-select flex max-h-[calc(100vh-2rem)] flex-col items-center gap-1 overflow-y-auto px-1.5 py-2.5 ${glass}`
-    : `no-select flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 ${glass}`;
+    ? `no-select no-scrollbar flex max-h-[calc(100vh-2rem)] flex-col items-center gap-1 overflow-y-auto px-1.5 py-2.5 ${glass}`
+    : `no-select no-scrollbar flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 ${glass}`;
 
   // The tool-options pill (colour/thickness/fill) floats just off the bar's page-facing side. It
   // shows when a drawing tool is freshly picked (or a shape/pen is selected) and collapses once
