@@ -29,6 +29,7 @@ interface SearchState {
 interface ScrollTarget {
   page: number; // 1-based
   nonce: number; // changes every request so the viewer re-reacts
+  offsetPts?: number; // distance from the page top (PDF points @ scale 1) for in-page link jumps
 }
 
 /** A pending request for the password of an encrypted PDF. Bytes are cached so retries don't re-read. */
@@ -116,6 +117,7 @@ interface ViewerState {
 
   setCurrentPage: (p: number) => void;
   goToPage: (p: number) => void;
+  goToPdfDestination: (pageIndex: number, topPts?: number) => void;
   nextPage: () => void;
   prevPage: () => void;
 
@@ -559,6 +561,13 @@ export const useViewer = create<ViewerState>((set, get) => ({
   goToPage: (p) => {
     const page = Math.min(Math.max(1, Math.round(p)), get().numPages || 1);
     set({ scrollTarget: { page, nonce: Date.now() } });
+  },
+  goToPdfDestination: (pageIndex, topPts) => {
+    const page = Math.min(Math.max(1, pageIndex + 1), get().numPages || 1);
+    // Dest y is from the page bottom; convert to a from-top offset using the uniform page height.
+    const offsetPts =
+      typeof topPts === "number" ? Math.max(0, get().baseSize.height - topPts) : undefined;
+    set({ scrollTarget: { page, offsetPts, nonce: Date.now() } });
   },
   nextPage: () => get().goToPage(get().currentPage + 1),
   prevPage: () => get().goToPage(get().currentPage - 1),

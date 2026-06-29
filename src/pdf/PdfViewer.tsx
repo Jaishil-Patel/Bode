@@ -147,11 +147,14 @@ export default function PdfViewer() {
     const el = scrollRef.current;
     if (!el) return;
     if (continuous) {
-      el.scrollTo({ top: (scrollTarget.page - 1) * rowH, behavior: "smooth" });
+      // Add the in-page offset for link destinations, leaving a small margin above the target.
+      const within = scrollTarget.offsetPts ? scrollTarget.offsetPts * scale - 12 : 0;
+      const top = (scrollTarget.page - 1) * rowH + Math.max(0, within);
+      el.scrollTo({ top, behavior: "smooth" });
     } else {
       setCurrentPage(scrollTarget.page);
     }
-  }, [scrollTarget, rowH, continuous, setCurrentPage]);
+  }, [scrollTarget, rowH, scale, continuous, setCurrentPage]);
 
   if (!doc) return null;
 

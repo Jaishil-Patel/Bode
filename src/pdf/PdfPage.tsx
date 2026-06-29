@@ -3,6 +3,7 @@ import { pdfjs, type PdfDocument } from "./pdfWorker";
 import type { SearchMatch } from "./search";
 import { useViewer } from "../store/viewerStore";
 import AnnotationLayer from "../annotations/AnnotationLayer";
+import LinkLayer from "./LinkLayer";
 
 interface Props {
   doc: PdfDocument;
@@ -202,6 +203,7 @@ export default function PdfPage({
         <>
           <canvas ref={canvasRef} className="block" />
           <div ref={textLayerRef} className="textLayer" />
+          <LinkLayer doc={doc} pageNumber={pageNumber} scale={scale} />
           {filePath && (
             <AnnotationLayer
               filePath={filePath}
