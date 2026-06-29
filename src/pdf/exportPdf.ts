@@ -240,7 +240,7 @@ export async function exportAnnotatedPdf(
   const out = await doc.save();
 
   // A decrypted save is a different artefact than a signed one — name it accordingly.
-  const suffix = password ? "-unlocked.pdf" : "-signed.pdf";
+  const suffix = password ? "-unlocked.pdf" : "-edited.pdf";
   const dest = await save({
     defaultPath: withSuffix(filePath, suffix),
     filters: [{ name: "PDF", extensions: ["pdf"] }],

@@ -9,7 +9,7 @@ import {
   IconZoomOut,
   IconFitWidth,
   IconFitPage,
-  IconSave,
+  IconSaveDisk,
   IconUndo,
   IconRedo,
   IconSettings,
@@ -93,11 +93,15 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
       className="no-select flex min-h-12 items-center gap-1 border-b border-border bg-surface px-2"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
-      <Btn title="Toggle sidebar (Ctrl+B)" onClick={toggleSidebar} active={layout.sidebarOpen}>
-        <IconSidebar />
-      </Btn>
-
-      <div className="mx-1 h-6 w-px bg-border" />
+      {/* The sidebar (thumbnails/outline) only applies to PDFs, so hide its toggle for Markdown. */}
+      {!isMd && (
+        <>
+          <Btn title="Toggle sidebar (Ctrl+B)" onClick={toggleSidebar} active={layout.sidebarOpen}>
+            <IconSidebar />
+          </Btn>
+          <div className="mx-1 h-6 w-px bg-border" />
+        </>
+      )}
 
       {doc && (
         <>
@@ -151,7 +155,7 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
             <IconPen />
           </Btn>
           <Btn title="Save (Ctrl+S)" onClick={saveMd} disabled={!mdDirty}>
-            <IconSave />
+            <IconSaveDisk />
           </Btn>
           <div className="mx-1 h-6 w-px bg-border" />
         </>
@@ -175,7 +179,7 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
       )}
       {doc && (
         <Btn title={saving ? "Saving…" : "Save annotated PDF"} onClick={onSave}>
-          <IconSave className={saving ? "animate-pulse" : undefined} />
+          <IconSaveDisk className={saving ? "animate-pulse" : undefined} />
         </Btn>
       )}
       <Btn title="Settings" onClick={onOpenSettings}>

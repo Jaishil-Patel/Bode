@@ -68,8 +68,9 @@ export const IconEdit = (p: P) =>
   svg(<><path d="M3 5.5h10" /><path d="M3 12h7" /><path d="M3 18.5h10" /><path d="M19 5v14" /><path d="M17 5h4" /><path d="M17 19h4" /></>, p.className);
 export const IconSignature = (p: P) =>
   svg(<><path d="M3 17c2 0 3-7 5-7s1 5 3 5 2-8 4-8 2 6 4 6" /><path d="M3 21h18" /></>, p.className);
-export const IconSave = (p: P) =>
-  svg(<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></>, p.className);
+// Save (floppy disk): writing a file in place — used for Markdown and annotated-PDF saves.
+export const IconSaveDisk = (p: P) =>
+  svg(<><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><path d="M17 21v-8H7v8" /><path d="M7 3v5h8" /></>, p.className);
 export const IconUndo = (p: P) =>
   svg(<><path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10H8" /></>, p.className);
 export const IconRedo = (p: P) =>
