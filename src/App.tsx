@@ -11,6 +11,7 @@ import Sidebar from "./components/Sidebar";
 import SearchBar from "./components/SearchBar";
 import CommandPalette from "./components/CommandPalette";
 import SignaturePad from "./components/SignaturePad";
+import PasswordPrompt from "./components/PasswordPrompt";
 import SettingsPanel from "./settings/SettingsPanel";
 import PdfViewer from "./pdf/PdfViewer";
 import MarkdownView from "./markdown/MarkdownView";
@@ -220,14 +221,13 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [openWithDialog, toggleSearch, toggleSidebar, zoomIn, zoomOut, resetZoom, nextPage, prevPage, layout.continuous]);
 
-  const showSidebar = doc && layout.sidebarOpen && !layout.zenMode;
-  const showToolbar = !(layout.zenMode && layout.toolbarAutoHide);
+  const showSidebar = doc && layout.sidebarOpen;
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      {showToolbar && <Toolbar onOpenSettings={() => setSettingsOpen(true)} />}
+      <Toolbar onOpenSettings={() => setSettingsOpen(true)} />
       <TabBar />
-      {doc && !layout.zenMode && (layout.annotationsHidden ? <ShowToolsButton /> : <AnnotationBar />)}
+      {doc && (layout.annotationsHidden ? <ShowToolsButton /> : <AnnotationBar />)}
 
       <div className={`flex min-h-0 flex-1 ${layout.sidebarSide === "right" ? "flex-row-reverse" : ""}`}>
         {showSidebar && <Sidebar />}
@@ -254,6 +254,7 @@ export default function App() {
       />
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       <SignaturePad />
+      <PasswordPrompt />
     </div>
   );
 }

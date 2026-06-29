@@ -6,11 +6,25 @@ export interface OutlineItem {
   items: OutlineItem[];
 }
 
-/** Load a PDF document from raw bytes. */
-export async function loadPdfFromBytes(data: Uint8Array): Promise<PdfDocument> {
-  // PDF.js takes ownership of the buffer, so hand it a copy-safe view.
-  const task = pdfjs.getDocument({ data });
+/** Load a PDF document from raw bytes, optionally supplying a decryption password. */
+export async function loadPdfFromBytes(data: Uint8Array, password?: string): Promise<PdfDocument> {
+  // PDF.js transfers ownership of the buffer to its worker (detaching it); pass a copy if the
+  // caller needs to reuse the bytes (e.g. a password retry).
+  const task = pdfjs.getDocument({ data, password });
   return task.promise;
+}
+
+/** True when a load rejection means the PDF is encrypted and needs (a different) password. */
+export function isPasswordException(e: unknown): boolean {
+  return (e as { name?: string } | null)?.name === "PasswordException";
+}
+
+/** True when the password supplied to a previous load attempt was wrong (vs. simply missing). */
+export function isWrongPassword(e: unknown): boolean {
+  return (
+    isPasswordException(e) &&
+    (e as { code?: number }).code === pdfjs.PasswordResponses.INCORRECT_PASSWORD
+  );
 }
 
 /** Resolve a PDF.js outline (table of contents) into flat page indices. */

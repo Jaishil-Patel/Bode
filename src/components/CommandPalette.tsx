@@ -30,7 +30,6 @@ export default function CommandPalette({
       { id: "open", label: "Open PDF…", hint: "Ctrl+O", run: () => viewer.openWithDialog() },
       { id: "search", label: "Find in document", hint: "Ctrl+F", run: () => viewer.toggleSearch(true) },
       { id: "sidebar", label: "Toggle sidebar", hint: "Ctrl+B", run: settings.toggleSidebar },
-      { id: "zen", label: "Toggle zen mode", run: settings.toggleZen },
       { id: "fitw", label: "Fit width", run: () => viewer.setFitMode("width") },
       { id: "fitp", label: "Fit page", run: () => viewer.setFitMode("page") },
       { id: "zoomin", label: "Zoom in", run: viewer.zoomIn },
@@ -42,6 +41,14 @@ export default function CommandPalette({
       },
       { id: "settings", label: "Open settings", run: onOpenSettings },
     ];
+    // Only offered for PDFs unlocked with a password this session.
+    if (viewer.filePath && viewer.encryptedPaths.includes(viewer.filePath)) {
+      cmds.push({
+        id: "unlock",
+        label: "Save unlocked copy…",
+        run: () => viewer.exportUnlocked(),
+      });
+    }
     for (const t of BUILT_IN_THEMES) {
       cmds.push({ id: `theme-${t.name}`, label: `Theme: ${t.label}`, run: () => settings.setTheme(t.name) });
     }

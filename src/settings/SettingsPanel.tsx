@@ -1,4 +1,5 @@
 import { useSettings } from "./useSettings";
+import { useViewer } from "../store/viewerStore";
 import { BUILT_IN_THEMES, type CustomTheme } from "./themes";
 import { IconClose } from "../components/icons";
 
@@ -86,6 +87,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     updateLayout,
   } = useSettings();
 
+  const filePath = useViewer((s) => s.filePath);
+  const encryptedPaths = useViewer((s) => s.encryptedPaths);
+  const exportUnlocked = useViewer((s) => s.exportUnlocked);
+  const isEncrypted = !!filePath && encryptedPaths.includes(filePath);
+
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
       <div
@@ -167,11 +173,6 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               onChange={(v) => updateLayout({ openMode: v as "tabs" | "windows" })}
             />
           </div>
-          <Toggle
-            label="Auto-hide toolbar in zen mode"
-            checked={layout.toolbarAutoHide}
-            onChange={(v) => updateLayout({ toolbarAutoHide: v })}
-          />
           <label className="mt-2 flex items-center justify-between text-sm text-text">
             Page gap
             <input
@@ -184,6 +185,29 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             />
           </label>
         </Section>
+
+        {/* Password options are only meaningful for a PDF that was actually locked. */}
+        {isEncrypted && (
+          <Section title="Security">
+            <Toggle
+              label="Remove password when saving"
+              checked={layout.removePasswordOnSave}
+              onChange={(v) => updateLayout({ removePasswordOnSave: v })}
+            />
+            <p className="mt-1 text-xs text-muted">
+              Lets the Save button write an unlocked copy of this password-protected PDF.
+            </p>
+            <button
+              onClick={() => {
+                onClose();
+                void exportUnlocked();
+              }}
+              className="mt-3 w-full rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90"
+            >
+              Save unlocked copy of this PDF…
+            </button>
+          </Section>
+        )}
 
         <Section title="Shortcuts">
           <ul className="space-y-1 text-sm text-muted">

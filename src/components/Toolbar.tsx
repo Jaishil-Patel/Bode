@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import { useAnnotations } from "../annotations/useAnnotations";
-import { exportAnnotatedPdf } from "../pdf/exportPdf";
 import {
   IconSidebar,
   IconSearch,
@@ -68,7 +67,6 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
   const mdDirty = useViewer((s) => s.mdDirty);
   const toggleMdEdit = useViewer((s) => s.toggleMdEdit);
   const saveMd = useViewer((s) => s.saveMd);
-  const byFile = useAnnotations((s) => s.byFile);
   const canUndo = useAnnotations((s) => s.past.length > 0);
   const canRedo = useAnnotations((s) => s.future.length > 0);
   const undo = useAnnotations((s) => s.undo);
@@ -82,9 +80,9 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
     if (!filePath || saving) return;
     setSaving(true);
     try {
-      await exportAnnotatedPdf(filePath, byFile[filePath] ?? []);
-    } catch (e) {
-      useViewer.setState({ error: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
+      // The store decides plain vs. decrypt-and-flatten based on whether this PDF is encrypted
+      // and the "Remove password when saving" setting; it also surfaces any error.
+      await useViewer.getState().saveAnnotated();
     } finally {
       setSaving(false);
     }

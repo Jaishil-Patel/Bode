@@ -7,6 +7,7 @@ import {
   type PDFPage,
   type PDFFont,
 } from "pdf-lib";
+import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { readPdfBytes, writePdfBytes } from "../platform/files";
 import type { Annotation } from "../annotations/useAnnotations";
@@ -209,9 +210,13 @@ async function drawAnnotation(
 export async function exportAnnotatedPdf(
   filePath: string,
   annotations: Annotation[],
+  /** When set, the (encrypted) source is decrypted first so the saved copy opens without a password. */
+  password?: string,
 ): Promise<boolean> {
   const raw = await readPdfBytes(filePath);
-  const doc = await PDFDocument.load(raw);
+  // pdf-lib can't parse an encrypted PDF, so decrypt via the Rust backend before flattening.
+  const source = password ? await decryptPdfBytes(raw, password) : raw;
+  const doc = await PDFDocument.load(source);
   const pages = doc.getPages();
 
   // Embed each standard font at most once and reuse it across annotations.
@@ -234,10 +239,42 @@ export async function exportAnnotatedPdf(
 
   const out = await doc.save();
 
-  const dot = filePath.lastIndexOf(".");
-  const suggested = (dot > 0 ? filePath.slice(0, dot) : filePath) + "-signed.pdf";
+  // A decrypted save is a different artefact than a signed one — name it accordingly.
+  const suffix = password ? "-unlocked.pdf" : "-signed.pdf";
   const dest = await save({
-    defaultPath: suggested,
+    defaultPath: withSuffix(filePath, suffix),
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (!dest) return false;
+
+  await writePdfBytes(dest, out);
+  return true;
+}
+
+/** Swap a path's extension for `suffix` (e.g. "/a/b.pdf" + "-unlocked.pdf" → "/a/b-unlocked.pdf"). */
+function withSuffix(filePath: string, suffix: string): string {
+  const dot = filePath.lastIndexOf(".");
+  return (dot > 0 ? filePath.slice(0, dot) : filePath) + suffix;
+}
+
+/** Decrypt PDF bytes via the Rust `decrypt_pdf` command, returning the plaintext PDF bytes. */
+async function decryptPdfBytes(bytes: Uint8Array, password: string): Promise<Uint8Array> {
+  const raw = await invoke<number[] | Uint8Array>("decrypt_pdf", {
+    bytes: Array.from(bytes),
+    password,
+  });
+  return raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
+}
+
+/**
+ * Write a decrypted copy of a password-protected PDF, using the password the user already unlocked
+ * it with. Returns true if a file was written, false if the user cancelled.
+ */
+export async function saveUnlockedPdf(filePath: string, password: string): Promise<boolean> {
+  const bytes = await readPdfBytes(filePath);
+  const out = await decryptPdfBytes(bytes, password);
+  const dest = await save({
+    defaultPath: withSuffix(filePath, "-unlocked.pdf"),
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
   if (!dest) return false;

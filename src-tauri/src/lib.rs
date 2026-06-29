@@ -28,6 +28,27 @@ fn write_file_bytes(path: String, bytes: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, bytes).map_err(|e| format!("Failed to write {path}: {e}"))
 }
 
+/// Decrypt a password-protected PDF and return the bytes of an unencrypted copy. The frontend
+/// hands us the original file bytes plus the password the user already unlocked the document with,
+/// so we can write a plaintext copy that opens without any password.
+#[tauri::command]
+fn decrypt_pdf(bytes: Vec<u8>, password: String) -> Result<Vec<u8>, String> {
+    // Loading with the password authenticates and decrypts the objects in memory.
+    let opts = lopdf::LoadOptions::with_password(&password);
+    let mut doc = lopdf::Document::load_mem_with_options(&bytes, opts)
+        .map_err(|e| format!("Could not unlock this PDF: {e}"))?;
+
+    // Strip all encryption so the saved copy needs no password: drop the in-memory encryption
+    // state (otherwise save_to would re-encrypt) and remove the trailer's /Encrypt reference.
+    doc.encryption_state = None;
+    doc.trailer.remove(b"Encrypt");
+
+    let mut out = Vec::new();
+    doc.save_to(&mut out)
+        .map_err(|e| format!("Could not write the unlocked PDF: {e}"))?;
+    Ok(out)
+}
+
 /// Return the path Bode was launched with, if any (consumed once).
 #[tauri::command]
 fn take_launch_file(state: State<LaunchFile>) -> Option<String> {
@@ -118,6 +139,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
             write_file_bytes,
+            decrypt_pdf,
             take_launch_file,
             set_titlebar_color
         ])

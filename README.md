@@ -16,7 +16,7 @@ A clean, fast, customizable PDF reader **and** annotator — that also opens and
 - **Zoom** — toolbar controls, `Ctrl`+scroll on desktop, and pinch-to-zoom on touch.
 - **Customization** — Light / Dark / Sepia / OLED themes plus a fully custom theme
   (any colors), layout options (continuous vs single page, sidebar side, page gap),
-  zen mode, and a `Ctrl+K` command palette.
+  and a `Ctrl+K` command palette.
 - **Remembers you** — recent files and last-read page per document, persisted to disk.
 
 ### Annotate & sign

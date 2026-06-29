@@ -21,11 +21,11 @@ export interface LayoutSettings {
   sidebarTab: "thumbnails" | "outline";
   // Which edge the floating annotation/tools bar docks to (vertical on left/right).
   toolsSide: "bottom" | "top" | "left" | "right";
-  toolbarAutoHide: boolean;
-  zenMode: boolean;
   annotationsHidden: boolean; // hide the floating annotation pill
   // How additional PDFs open: stacked as tabs in this window, or each in its own OS window.
   openMode: "tabs" | "windows";
+  // Allow the Save button to write an unlocked (decrypted) copy of a password-protected PDF.
+  removePasswordOnSave: boolean;
 }
 
 interface SettingsState {
@@ -41,7 +41,6 @@ interface SettingsState {
   setCustomThemeVar: (key: keyof CustomTheme, value: string) => void;
   updateLayout: (patch: Partial<LayoutSettings>) => void;
   toggleSidebar: () => void;
-  toggleZen: () => void;
   addRecent: (path: string, name: string) => void;
   clearRecents: () => void;
   savePosition: (path: string, page: number) => void;
@@ -54,10 +53,9 @@ const DEFAULT_LAYOUT: LayoutSettings = {
   sidebarSide: "left",
   sidebarTab: "thumbnails",
   toolsSide: "bottom",
-  toolbarAutoHide: false,
-  zenMode: false,
   annotationsHidden: false,
   openMode: "tabs",
+  removePasswordOnSave: false,
 };
 
 const STORE_FILE = "settings.json";
@@ -139,10 +137,6 @@ export const useSettings = create<SettingsState>((set, get) => ({
   },
   toggleSidebar: () => {
     set((st) => ({ layout: { ...st.layout, sidebarOpen: !st.layout.sidebarOpen } }));
-    void persist(get());
-  },
-  toggleZen: () => {
-    set((st) => ({ layout: { ...st.layout, zenMode: !st.layout.zenMode } }));
     void persist(get());
   },
   addRecent: (path, name) => {

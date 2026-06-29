@@ -3,8 +3,16 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readPdfBytes, readTextFile, writeTextFile } from "../platform/files";
 import { openInNewWindow } from "../platform/window";
 import { renderMarkdown } from "../markdown/renderMarkdown";
-import { loadPdfFromBytes, getOutline, type OutlineItem } from "../pdf/usePdfDocument";
+import {
+  loadPdfFromBytes,
+  getOutline,
+  isPasswordException,
+  isWrongPassword,
+  type OutlineItem,
+} from "../pdf/usePdfDocument";
 import { searchDocument, type SearchMatch } from "../pdf/search";
+import { saveUnlockedPdf, exportAnnotatedPdf } from "../pdf/exportPdf";
+import { useAnnotations } from "../annotations/useAnnotations";
 import type { PdfDocument } from "../pdf/pdfWorker";
 import { useSettings } from "../settings/useSettings";
 
@@ -21,6 +29,15 @@ interface SearchState {
 interface ScrollTarget {
   page: number; // 1-based
   nonce: number; // changes every request so the viewer re-reacts
+}
+
+/** A pending request for the password of an encrypted PDF. Bytes are cached so retries don't re-read. */
+interface PasswordPrompt {
+  tabId: string;
+  path: string;
+  name: string;
+  data: Uint8Array;
+  wrong: boolean; // true once a supplied password was rejected
 }
 
 /** What kind of document a tab holds. PDFs go through PDF.js; Markdown is a reflowed reading view. */
@@ -66,6 +83,11 @@ interface ViewerState {
   search: SearchState;
   scrollTarget: ScrollTarget | null;
 
+  /** Set when an encrypted PDF is waiting for the user to type a password. */
+  passwordPrompt: PasswordPrompt | null;
+  /** Paths of open PDFs unlocked with a password this session — gates the "Save unlocked copy" action. */
+  encryptedPaths: string[];
+
   // Open documents. In "tabs" mode this can hold several; in "windows" mode each window
   // keeps a single entry. The top-level fields above mirror whichever tab is active.
   tabs: TabMeta[];
@@ -73,6 +95,10 @@ interface ViewerState {
 
   openWithDialog: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
+  submitPassword: (password: string) => Promise<void>;
+  cancelPassword: () => void;
+  exportUnlocked: () => Promise<void>;
+  saveAnnotated: () => Promise<void>;
   switchTab: (id: string) => void;
   closeTab: (id: string) => void;
   close: () => void;
@@ -126,6 +152,13 @@ type TabSnapshot = Pick<
 >;
 const tabStates = new Map<string, TabSnapshot>();
 
+/**
+ * Passwords used to unlock encrypted PDFs this session, keyed by file path. Kept out of the
+ * reactive store (and never persisted) so the secret doesn't leak into components or devtools —
+ * the store only exposes `encryptedPaths` for UI gating. Used to write an unlocked copy on demand.
+ */
+const pdfPasswords = new Map<string, string>();
+
 const newTabId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -175,10 +208,20 @@ const EMPTY_DOC_STATE = {
   scrollTarget: null as ScrollTarget | null,
 };
 
-/** Load a PDF into a tab snapshot via PDF.js, restoring the last-read page if there is one. */
-async function loadPdfTab(path: string, name: string): Promise<TabSnapshot> {
-  const data = await readPdfBytes(path);
-  const doc = await loadPdfFromBytes(data);
+/**
+ * Build a PDF tab snapshot from already-read bytes via PDF.js, restoring the last-read page if
+ * there is one. `password` is forwarded for encrypted PDFs; an encrypted file with a missing or
+ * wrong password rejects with a PasswordException the caller handles.
+ */
+async function buildPdfSnapshot(
+  path: string,
+  name: string,
+  data: Uint8Array,
+  password?: string,
+): Promise<TabSnapshot> {
+  // PDF.js transfers (detaches) the buffer to its worker, so give it a fresh copy each call —
+  // otherwise a password retry would reuse an already-detached buffer and postMessage would throw.
+  const doc = await loadPdfFromBytes(data.slice(), password);
   const first = await doc.getPage(1);
   const vp = first.getViewport({ scale: 1 });
   const outline = await getOutline(doc).catch(() => []);
@@ -252,6 +295,9 @@ export const useViewer = create<ViewerState>((set, get) => ({
   search: emptySearch(),
   scrollTarget: null,
 
+  passwordPrompt: null,
+  encryptedPaths: [],
+
   tabs: [],
   activeTabId: null,
 
@@ -300,8 +346,22 @@ export const useViewer = create<ViewerState>((set, get) => ({
     });
 
     try {
-      const loaded: TabSnapshot =
-        kind === "md" ? await loadMarkdownTab(path, name) : await loadPdfTab(path, name);
+      let loaded: TabSnapshot;
+      if (kind === "md") {
+        loaded = await loadMarkdownTab(path, name);
+      } else {
+        const data = await readPdfBytes(path);
+        try {
+          loaded = await buildPdfSnapshot(path, name, data);
+        } catch (e) {
+          // Encrypted PDF: hold the bytes and ask for a password instead of erroring out.
+          if (isPasswordException(e)) {
+            set({ loading: false, passwordPrompt: { tabId: id, path, name, data, wrong: false } });
+            return;
+          }
+          throw e;
+        }
+      }
       useSettings.getState().addRecent(path, name);
       tabStates.set(id, loaded);
       // The user may have switched away while this loaded; only publish if still active.
@@ -309,6 +369,81 @@ export const useViewer = create<ViewerState>((set, get) => ({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (get().activeTabId === id) set({ loading: false, error: msg });
+    }
+  },
+
+  submitPassword: async (password) => {
+    const prompt = get().passwordPrompt;
+    if (!prompt) return;
+    const { tabId, path, name, data } = prompt;
+    try {
+      const loaded = await buildPdfSnapshot(path, name, data, password);
+      useSettings.getState().addRecent(path, name);
+      tabStates.set(tabId, loaded);
+      // Remember the password (out of the reactive store) so we can write an unlocked copy later,
+      // and flag the path so the "Save unlocked copy" command appears for it.
+      pdfPasswords.set(path, password);
+      set({
+        passwordPrompt: null,
+        encryptedPaths: get().encryptedPaths.includes(path)
+          ? get().encryptedPaths
+          : [...get().encryptedPaths, path],
+      });
+      // Only publish to the visible viewer if this tab is still the active one.
+      if (get().activeTabId === tabId) set({ ...loaded, loading: false, error: null });
+    } catch (e) {
+      // Wrong password: keep the modal open and flag it. Anything else is a real failure.
+      if (isWrongPassword(e)) {
+        set({ passwordPrompt: { ...prompt, wrong: true } });
+      } else {
+        const msg = e instanceof Error ? e.message : String(e);
+        set({ passwordPrompt: null });
+        if (get().activeTabId === tabId) set({ error: msg });
+      }
+    }
+  },
+
+  cancelPassword: () => {
+    const prompt = get().passwordPrompt;
+    if (!prompt) return;
+    set({ passwordPrompt: null });
+    get().closeTab(prompt.tabId); // drop the half-opened tab we created for this file
+  },
+
+  exportUnlocked: async () => {
+    const path = get().filePath;
+    if (!path) return;
+    const password = pdfPasswords.get(path);
+    if (!password) return; // not an unlocked-this-session PDF — action shouldn't have been offered
+    try {
+      await saveUnlockedPdf(path, password);
+    } catch (e) {
+      set({ error: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  },
+
+  saveAnnotated: async () => {
+    const path = get().filePath;
+    if (!path) return;
+    const annotations = useAnnotations.getState().byFile[path] ?? [];
+    const password = pdfPasswords.get(path); // set only for PDFs unlocked this session
+    try {
+      if (password) {
+        // pdf-lib can't keep the encryption, so flattening an encrypted PDF necessarily drops the
+        // password. Only do that when the user has opted in; otherwise point them at the explicit action.
+        if (!useSettings.getState().layout.removePasswordOnSave) {
+          set({
+            error:
+              "This PDF is password-protected. Turn on “Remove password when saving” in Settings, or use “Save unlocked copy”.",
+          });
+          return;
+        }
+        await exportAnnotatedPdf(path, annotations, password);
+      } else {
+        await exportAnnotatedPdf(path, annotations);
+      }
+    } catch (e) {
+      set({ error: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
     }
   },
 
@@ -342,6 +477,14 @@ export const useViewer = create<ViewerState>((set, get) => ({
     const tabs = get().tabs;
     const idx = tabs.findIndex((t) => t.id === id);
     const remaining = tabs.filter((t) => t.id !== id);
+
+    // Forget any unlock password for this file (paths are unique per tab — openPath dedupes).
+    const closedPath = tabs[idx]?.filePath;
+    if (closedPath) {
+      pdfPasswords.delete(closedPath);
+      const encryptedPaths = get().encryptedPaths.filter((p) => p !== closedPath);
+      if (encryptedPaths.length !== get().encryptedPaths.length) set({ encryptedPaths });
+    }
 
     if (get().activeTabId !== id) {
       set({ tabs: remaining });
