@@ -12,6 +12,15 @@ import {
 } from "../pdf/usePdfDocument";
 import { searchDocument, type SearchMatch } from "../pdf/search";
 import { saveUnlockedPdf, exportAnnotatedPdf } from "../pdf/exportPdf";
+import {
+  initialManifest,
+  isPristine,
+  indexRemap,
+  removeIds,
+  sourceToVisible,
+  movePages as movePagesIn,
+  type PageRef,
+} from "../pdf/pageOps";
 import { useAnnotations } from "../annotations/useAnnotations";
 import type { PdfDocument } from "../pdf/pdfWorker";
 import { useSettings } from "../settings/useSettings";
@@ -68,7 +77,18 @@ interface ViewerState {
   mdDirty: boolean;
   fileName: string | null;
   filePath: string | null;
+  /**
+   * Number of pages the viewer shows — the manifest length, which is the source page count until
+   * pages are removed. Everything user-facing (page counter, navigation, annotations) counts here.
+   */
   numPages: number;
+  /**
+   * Staged page order for this tab. Diverges from the source once pages are removed or reordered,
+   * and is applied to the file only on save. Empty for Markdown tabs.
+   */
+  pages: PageRef[];
+  /** True while the sidebar is in page-organize mode. Transient UI state, never persisted. */
+  organizeOpen: boolean;
   /** Page size at scale 1.0, used as the uniform model for scroll virtualization. */
   baseSize: { width: number; height: number };
   outline: OutlineItem[];
@@ -100,6 +120,14 @@ interface ViewerState {
   cancelPassword: () => void;
   exportUnlocked: () => Promise<void>;
   saveAnnotated: () => Promise<void>;
+
+  setOrganizeOpen: (open: boolean) => void;
+  removePages: (ids: string[]) => void;
+  reorderPages: (ids: string[], toIndex: number) => void;
+  resetPageEdits: () => void;
+  /** True when the staged page order differs from the file on disk. */
+  hasPageEdits: () => boolean;
+
   switchTab: (id: string) => void;
   closeTab: (id: string) => void;
   close: () => void;
@@ -143,6 +171,7 @@ type TabSnapshot = Pick<
   | "fileName"
   | "filePath"
   | "numPages"
+  | "pages"
   | "baseSize"
   | "outline"
   | "currentPage"
@@ -181,6 +210,7 @@ function captureActive(get: () => ViewerState): TabSnapshot {
     fileName: s.fileName,
     filePath: s.filePath,
     numPages: s.numPages,
+    pages: s.pages,
     baseSize: s.baseSize,
     outline: s.outline,
     currentPage: s.currentPage,
@@ -201,6 +231,7 @@ const EMPTY_DOC_STATE = {
   fileName: null,
   filePath: null,
   numPages: 0,
+  pages: [] as PageRef[],
   baseSize: { width: 612, height: 792 },
   outline: [] as OutlineItem[],
   currentPage: 1,
@@ -240,6 +271,7 @@ async function buildPdfSnapshot(
     fileName: name,
     filePath: path,
     numPages: doc.numPages,
+    pages: initialManifest(doc.numPages),
     baseSize: { width: vp.width, height: vp.height },
     outline,
     currentPage: 1,
@@ -263,6 +295,7 @@ async function loadMarkdownTab(path: string, name: string): Promise<TabSnapshot>
     fileName: name,
     filePath: path,
     numPages: 0,
+    pages: [],
     baseSize: { width: 612, height: 792 },
     outline: [],
     currentPage: 1,
@@ -274,6 +307,38 @@ async function loadMarkdownTab(path: string, name: string): Promise<TabSnapshot>
   };
 }
 
+/**
+ * Publish an edited page manifest and bring everything that counts in visible page numbers back
+ * into agreement with it: the page count, the annotations (via `remap`), the current page, and any
+ * search results — whose page indexes were resolved against the old order and would now mislead.
+ */
+function commitPages(
+  set: (partial: Partial<ViewerState>) => void,
+  get: () => ViewerState,
+  next: PageRef[],
+  remap: ReadonlyMap<number, number>,
+) {
+  const { filePath, currentPage, search } = get();
+  if (filePath) useAnnotations.getState().remapPages(filePath, remap);
+
+  // Follow the page the reader was on; if it was the one removed, stay at that position in the
+  // shortened document instead of jumping to the top.
+  const followed = remap.get(currentPage - 1);
+  const page = Math.min(
+    Math.max(followed !== undefined ? followed + 1 : currentPage, 1),
+    Math.max(next.length, 1),
+  );
+
+  set({
+    pages: next,
+    numPages: next.length,
+    currentPage: page,
+    search: search.matches.length ? { ...search, matches: [], current: -1 } : search,
+    // Page positions shifted under the reader — re-anchor the scroll on the page they were reading.
+    scrollTarget: { page, nonce: Date.now() },
+  });
+}
+
 export const useViewer = create<ViewerState>((set, get) => ({
   doc: null,
   mdHtml: null,
@@ -283,6 +348,8 @@ export const useViewer = create<ViewerState>((set, get) => ({
   fileName: null,
   filePath: null,
   numPages: 0,
+  pages: [],
+  organizeOpen: false,
   baseSize: { width: 612, height: 792 }, // US Letter @ 72dpi fallback
   outline: [],
 
@@ -429,6 +496,9 @@ export const useViewer = create<ViewerState>((set, get) => ({
     if (!path) return;
     const annotations = useAnnotations.getState().byFile[path] ?? [];
     const password = pdfPasswords.get(path); // set only for PDFs unlocked this session
+    // Only pass the manifest when it actually differs, so an untouched document is still saved by
+    // drawing on its own pages rather than being rebuilt page by page.
+    const manifest = get().hasPageEdits() ? get().pages : undefined;
     try {
       if (password) {
         // pdf-lib can't keep the encryption, so flattening an encrypted PDF necessarily drops the
@@ -440,13 +510,50 @@ export const useViewer = create<ViewerState>((set, get) => ({
           });
           return;
         }
-        await exportAnnotatedPdf(path, annotations, password);
+        await exportAnnotatedPdf(path, annotations, password, manifest);
       } else {
-        await exportAnnotatedPdf(path, annotations);
+        await exportAnnotatedPdf(path, annotations, undefined, manifest);
       }
     } catch (e) {
       set({ error: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
     }
+  },
+
+  setOrganizeOpen: (open) => set({ organizeOpen: open }),
+
+  removePages: (ids) => {
+    const idSet = new Set(ids);
+    const before = get().pages;
+    const next = removeIds(before, idSet);
+    if (next.length === before.length) return; // nothing matched
+    if (next.length === 0) {
+      set({ error: "A PDF needs at least one page." });
+      return;
+    }
+    commitPages(set, get, next, indexRemap(before, next));
+  },
+
+  reorderPages: (ids, toIndex) => {
+    const before = get().pages;
+    const next = movePagesIn(before, new Set(ids), toIndex);
+    if (next.every((p, i) => p.id === before[i]?.id)) return; // no-op drop
+    commitPages(set, get, next, indexRemap(before, next));
+  },
+
+  resetPageEdits: () => {
+    const { doc, pages } = get();
+    if (!doc) return;
+    const fresh = initialManifest(doc.numPages);
+    // A fresh manifest has new ids, so annotations can't be matched by id — send each one back to
+    // the source page it is sitting on, which is exactly where that page lands in source order.
+    const remap = new Map<number, number>();
+    pages.forEach((p, i) => remap.set(i, p.srcPage - 1));
+    commitPages(set, get, fresh, remap);
+  },
+
+  hasPageEdits: () => {
+    const { doc, pages } = get();
+    return !!doc && !isPristine(pages, doc.numPages);
   },
 
   switchTab: (id) => {
@@ -543,7 +650,11 @@ export const useViewer = create<ViewerState>((set, get) => ({
     set({ fitMode: "custom", customScale: next });
   },
   zoomBy: (factor) => {
-    const next = Math.min(Math.max(get().scale * factor, 0.1), 6);
+    // Base off customScale while already zooming: `scale` only catches up after the viewer
+    // re-renders, so several gesture events in one frame would all compound off a stale value.
+    const { fitMode, customScale, scale } = get();
+    const base = fitMode === "custom" ? customScale : scale;
+    const next = Math.min(Math.max(base * factor, 0.1), 6);
     set({ fitMode: "custom", customScale: next });
   },
   resetZoom: () => set({ fitMode: "custom", customScale: 1 }),
@@ -563,7 +674,11 @@ export const useViewer = create<ViewerState>((set, get) => ({
     set({ scrollTarget: { page, nonce: Date.now() } });
   },
   goToPdfDestination: (pageIndex, topPts) => {
-    const page = Math.min(Math.max(1, pageIndex + 1), get().numPages || 1);
+    // Outline entries and link targets are resolved against the source document, so translate
+    // them into visible page numbers before scrolling. A removed page has nowhere to jump to.
+    const visible = sourceToVisible(get().pages).get(pageIndex);
+    if (get().pages.length && visible === undefined) return;
+    const page = Math.min(Math.max(1, (visible ?? pageIndex) + 1), get().numPages || 1);
     // Dest y is from the page bottom; convert to a from-top offset using the uniform page height.
     const offsetPts =
       typeof topPts === "number" ? Math.max(0, get().baseSize.height - topPts) : undefined;
@@ -584,8 +699,15 @@ export const useViewer = create<ViewerState>((set, get) => ({
       set((st) => ({ search: { ...st.search, busy: false, matches: [], current: -1 } }));
       return;
     }
-    const matches = await searchDocument(doc, query.trim());
+    const found = await searchDocument(doc, query.trim());
     if (token !== searchToken) return; // a newer search (or tab switch) superseded this one
+    // The search walks the source document, so its page indexes are in source space. Translate to
+    // visible pages and drop hits on pages the user has removed.
+    const toVisible = sourceToVisible(get().pages);
+    const matches = found.flatMap((m) => {
+      const visible = toVisible.get(m.pageIndex);
+      return visible === undefined ? [] : [{ ...m, pageIndex: visible }];
+    });
     set((st) => ({
       search: { ...st.search, busy: false, matches, current: matches.length ? 0 : -1 },
     }));

@@ -221,6 +221,29 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [openWithDialog, toggleSearch, toggleSidebar, zoomIn, zoomOut, resetZoom, nextPage, prevPage, layout.continuous]);
 
+  // The window is created with zoomHotkeysEnabled so WebView2 forwards trackpad pinches to the
+  // page at all (it suppresses them otherwise). The flip side is that an unhandled pinch would
+  // scale the entire UI, chrome included, so cancel the browser's own zoom app-wide here. This
+  // runs in the capture phase and only prevents the default — the viewer's own bubble-phase
+  // handler still receives the event and turns it into a PDF zoom.
+  useEffect(() => {
+    const kill = (e: Event) => e.preventDefault();
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) e.preventDefault();
+    };
+    const opts = { capture: true, passive: false } as const;
+    window.addEventListener("wheel", onWheel, opts);
+    window.addEventListener("gesturestart", kill, opts);
+    window.addEventListener("gesturechange", kill, opts);
+    window.addEventListener("gestureend", kill, opts);
+    return () => {
+      window.removeEventListener("wheel", onWheel, opts);
+      window.removeEventListener("gesturestart", kill, opts);
+      window.removeEventListener("gesturechange", kill, opts);
+      window.removeEventListener("gestureend", kill, opts);
+    };
+  }, []);
+
   const showSidebar = doc && layout.sidebarOpen;
 
   return (

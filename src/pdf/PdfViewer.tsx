@@ -10,6 +10,7 @@ export default function PdfViewer() {
   const {
     doc,
     numPages,
+    pages: manifest,
     baseSize,
     fitMode,
     customScale,
@@ -38,56 +39,107 @@ export default function PdfViewer() {
     return () => ro.disconnect();
   }, []);
 
-  // Ctrl/Cmd + wheel zooms (up = in, down = out). Non-passive so we can stop the
-  // WebView's built-in page zoom.
+  // Where the in-flight zoom gesture is centred, captured before the scale changes so the
+  // layout effect below can keep that point under the cursor/fingers.
+  const zoomAnchor = useRef<{ sx: number; sy: number; cx: number; cy: number; s: number } | null>(
+    null
+  );
+
+  // Zoom gestures: trackpad pinch, mouse ctrl+wheel and touch pinch.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+
+    const zoomAt = (factor: number, clientX: number, clientY: number) => {
+      if (Math.abs(factor - 1) < 0.0005) return;
+      const r = el.getBoundingClientRect();
+      zoomAnchor.current = {
+        sx: el.scrollLeft,
+        sy: el.scrollTop,
+        cx: clientX - r.left,
+        cy: clientY - r.top,
+        s: useViewer.getState().scale,
+      };
       useViewer.getState().zoomBy(factor);
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
 
-  // Two-finger pinch zooms on touch devices (Android). Non-passive so we can prevent the
-  // WebView's native pinch-zoom and feed the gesture into our own scale instead.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+    // Chromium (WebView2, Android WebView) reports a trackpad pinch as a wheel event with
+    // ctrlKey set and small fractional deltas, while a real mouse wheel notch arrives as one
+    // large delta. Scale proportionally for the pinch, step for the notch — a fixed step per
+    // event would slam a pinch straight into the zoom limits.
+    let gesturing = false;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || gesturing) return;
+      e.preventDefault();
+      const d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 100 : e.deltaY;
+      const factor = Math.abs(d) < 40 ? Math.exp(-d * 0.012) : d < 0 ? 1.12 : 1 / 1.12;
+      zoomAt(factor, e.clientX, e.clientY);
+    };
+
+    // WebKit (macOS WKWebView, Safari) does not synthesize ctrl+wheel for a trackpad pinch;
+    // it fires these non-standard gesture events with a cumulative `scale` instead.
+    type GestureEvent = MouseEvent & { scale: number };
+    let lastGestureScale = 1;
+    const onGestureStart = (e: Event) => {
+      e.preventDefault();
+      gesturing = true;
+      lastGestureScale = (e as GestureEvent).scale || 1;
+    };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const ge = e as GestureEvent;
+      if (!ge.scale || lastGestureScale <= 0) return;
+      zoomAt(ge.scale / lastGestureScale, ge.clientX, ge.clientY);
+      lastGestureScale = ge.scale;
+    };
+    const onGestureEnd = (e: Event) => {
+      e.preventDefault();
+      gesturing = false;
+      lastGestureScale = 1;
+    };
+
+    // Two-finger pinch on touch devices (Android). Non-passive so we can prevent the WebView's
+    // native pinch-zoom and feed the gesture into our own scale instead.
     let lastDist = 0;
     const dist = (t: TouchList) =>
       Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
-    const onStart = (e: TouchEvent) => {
+    const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) lastDist = dist(e.touches);
     };
-    const onMove = (e: TouchEvent) => {
+    const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 2) return;
       e.preventDefault();
       const d = dist(e.touches);
       if (lastDist > 0 && d > 0) {
         const factor = d / lastDist;
         if (Math.abs(factor - 1) > 0.005) {
-          useViewer.getState().zoomBy(factor);
+          const t = e.touches;
+          zoomAt(factor, (t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2);
           lastDist = d;
         }
       } else {
         lastDist = d;
       }
     };
-    const onEnd = (e: TouchEvent) => {
+    const onTouchEnd = (e: TouchEvent) => {
       if (e.touches.length < 2) lastDist = 0;
     };
-    el.addEventListener("touchstart", onStart, { passive: true });
-    el.addEventListener("touchmove", onMove, { passive: false });
-    el.addEventListener("touchend", onEnd, { passive: true });
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("gesturestart", onGestureStart, { passive: false });
+    el.addEventListener("gesturechange", onGestureChange, { passive: false });
+    el.addEventListener("gestureend", onGestureEnd, { passive: false });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
     return () => {
-      el.removeEventListener("touchstart", onStart);
-      el.removeEventListener("touchmove", onMove);
-      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", onGestureStart);
+      el.removeEventListener("gesturechange", onGestureChange);
+      el.removeEventListener("gestureend", onGestureEnd);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
     };
   }, []);
 
@@ -108,15 +160,25 @@ export default function PdfViewer() {
   const pageH = baseSize.height * scale;
   const rowH = pageH + pageGap;
 
-  // Keep the current page anchored when the scale changes.
+  // Keep the view anchored when the scale changes: on the gesture's focal point if the zoom
+  // came from a pinch/ctrl+wheel, otherwise on the current page (zoom buttons and shortcuts).
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (!el || !continuous) return;
+    if (!el) return;
     if (Math.abs(prevScale.current - scale) > 0.0001) {
-      el.scrollTop = (currentPage - 1) * rowH;
+      const a = zoomAnchor.current;
+      if (a) {
+        const pad = continuous ? pageGap / 2 : PADDING;
+        const ratio = scale / a.s;
+        el.scrollLeft = (a.sx + a.cx) * ratio - a.cx;
+        el.scrollTop = (a.sy + a.cy - pad) * ratio + pad - a.cy;
+        zoomAnchor.current = null;
+      } else if (continuous) {
+        el.scrollTop = (currentPage - 1) * rowH;
+      }
       prevScale.current = scale;
     }
-  }, [scale, rowH, currentPage, continuous]);
+  }, [scale, rowH, currentPage, continuous, pageGap]);
 
   // Scroll-driven virtualization window + current page tracking.
   const [scrollTop, setScrollTop] = useState(0);
@@ -167,6 +229,7 @@ export default function PdfViewer() {
           <PdfPage
             doc={doc}
             pageNumber={currentPage}
+            srcPage={manifest[currentPage - 1]?.srcPage}
             scale={scale}
             width={pageW}
             height={pageH}
@@ -187,10 +250,11 @@ export default function PdfViewer() {
   const pages = [];
   for (let i = first; i <= last; i++) {
     pages.push(
-      <div key={i} style={{ position: "absolute", top: i * rowH, left: 0, right: 0 }}>
+      <div key={manifest[i]?.id ?? i} style={{ position: "absolute", top: i * rowH, left: 0, right: 0 }}>
         <PdfPage
           doc={doc}
           pageNumber={i + 1}
+          srcPage={manifest[i]?.srcPage}
           scale={scale}
           width={pageW}
           height={pageH}

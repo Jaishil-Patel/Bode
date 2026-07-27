@@ -41,6 +41,26 @@ export default function CommandPalette({
       },
       { id: "settings", label: "Open settings", run: onOpenSettings },
     ];
+    // Page editing only applies to PDFs.
+    if (viewer.doc) {
+      cmds.push({
+        id: "organize",
+        label: viewer.organizeOpen ? "Close page organizer" : "Organize pages…",
+        hint: "remove & reorder",
+        run: () => {
+          const next = !viewer.organizeOpen;
+          viewer.setOrganizeOpen(next);
+          if (next && !settings.layout.sidebarOpen) settings.toggleSidebar();
+        },
+      });
+      if (viewer.hasPageEdits()) {
+        cmds.push({
+          id: "resetpages",
+          label: "Discard page edits",
+          run: () => viewer.resetPageEdits(),
+        });
+      }
+    }
     // Only offered for PDFs unlocked with a password this session.
     if (viewer.filePath && viewer.encryptedPaths.includes(viewer.filePath)) {
       cmds.push({

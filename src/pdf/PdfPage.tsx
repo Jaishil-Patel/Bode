@@ -7,7 +7,13 @@ import LinkLayer from "./LinkLayer";
 
 interface Props {
   doc: PdfDocument;
-  pageNumber: number; // 1-based
+  /** 1-based position in the viewer. Annotations, search and the page label all count in this space. */
+  pageNumber: number;
+  /**
+   * 1-based page to pull from the source document, which differs from `pageNumber` once pages have
+   * been reordered or removed. Defaults to `pageNumber` for an unedited document.
+   */
+  srcPage?: number;
   scale: number;
   width: number; // rendered CSS width in px (for placeholder sizing)
   height: number; // rendered CSS height in px
@@ -72,6 +78,7 @@ function ascentRatio(fontFamily: string): number {
 export default function PdfPage({
   doc,
   pageNumber,
+  srcPage,
   scale,
   width,
   height,
@@ -79,6 +86,7 @@ export default function PdfPage({
   query,
   currentMatch,
 }: Props) {
+  const src = srcPage ?? pageNumber;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const renderToken = useRef(0);
@@ -92,7 +100,7 @@ export default function PdfPage({
       null;
 
     (async () => {
-      const page = await doc.getPage(pageNumber);
+      const page = await doc.getPage(src);
       if (cancelled || token !== renderToken.current) return;
 
       const dpr = window.devicePixelRatio || 1;
@@ -191,7 +199,7 @@ export default function PdfPage({
       cancelled = true;
       renderTask?.cancel();
     };
-  }, [doc, pageNumber, scale, visible, query, currentMatch]);
+  }, [doc, src, pageNumber, scale, visible, query, currentMatch]);
 
   return (
     <div
@@ -203,7 +211,7 @@ export default function PdfPage({
         <>
           <canvas ref={canvasRef} className="block" />
           <div ref={textLayerRef} className="textLayer" />
-          <LinkLayer doc={doc} pageNumber={pageNumber} scale={scale} />
+          <LinkLayer doc={doc} pageNumber={src} scale={scale} />
           {filePath && (
             <AnnotationLayer
               filePath={filePath}

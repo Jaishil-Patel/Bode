@@ -140,6 +140,7 @@ interface AnnotationState {
   update: (file: string, id: string, patch: Partial<Annotation>) => void;
   remove: (file: string, id: string) => void;
   clearPage: (file: string, pageIndex: number) => void;
+  remapPages: (file: string, map: ReadonlyMap<number, number>) => void;
   undo: () => void;
   redo: () => void;
 
@@ -393,6 +394,27 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
         byFile: {
           ...st.byFile,
           [file]: (st.byFile[file] ?? []).filter((a) => a.pageIndex !== pageIndex),
+        },
+      }));
+      save();
+    },
+    /**
+     * Move annotations to follow their pages after a page edit (remove/reorder), using an old →
+     * new visible page index map. Annotations on pages missing from the map are dropped with the
+     * page. One history entry, so undo restores placement and removal together.
+     */
+    remapPages: (file, map) => {
+      const list = get().byFile[file];
+      if (!list?.length) return; // nothing to move — don't spend an undo step
+      pushHistory();
+      coalesceKey = null;
+      set((st) => ({
+        byFile: {
+          ...st.byFile,
+          [file]: (st.byFile[file] ?? []).flatMap((a) => {
+            const to = map.get(a.pageIndex);
+            return to === undefined ? [] : [{ ...a, pageIndex: to } as Annotation];
+          }),
         },
       }));
       save();

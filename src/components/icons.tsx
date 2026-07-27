@@ -88,5 +88,8 @@ export const IconGrip = (p: P) =>
     </>,
     p.className
   );
+// Organize pages: a page with a second sheet behind it, for page-level editing.
+export const IconPages = (p: P) =>
+  svg(<><path d="M9 3h7l4 4v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M15 3v5h5" /><path d="M4 8v11a3 3 0 0 0 3 3h9" /></>, p.className);
 export const IconEraser = (p: P) =>
   svg(<><path d="M7 21 3.5 17.5a2 2 0 0 1 0-2.8l8.7-8.7a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8L13 19" /><path d="M7 21h12" /><path d="m9 12 4 4" /></>, p.className);

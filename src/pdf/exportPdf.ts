@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { readPdfBytes, writePdfBytes } from "../platform/files";
 import type { Annotation } from "../annotations/useAnnotations";
+import { applyManifest, type PageRef } from "./pageOps";
 
 /*
  * Flattens the overlay annotations (the same ones AnnotationLayer renders) into the original
@@ -212,11 +213,16 @@ export async function exportAnnotatedPdf(
   annotations: Annotation[],
   /** When set, the (encrypted) source is decrypted first so the saved copy opens without a password. */
   password?: string,
+  /** Staged page edits. When set, the output is rebuilt in this page order before flattening. */
+  manifest?: PageRef[],
 ): Promise<boolean> {
   const raw = await readPdfBytes(filePath);
   // pdf-lib can't parse an encrypted PDF, so decrypt via the Rust backend before flattening.
   const source = password ? await decryptPdfBytes(raw, password) : raw;
-  const doc = await PDFDocument.load(source);
+  const loaded = await PDFDocument.load(source);
+  // Apply page removals/reordering first. The rebuilt page order *is* the manifest order, which is
+  // the space annotation `pageIndex` already counts in, so they need no further mapping below.
+  const doc = manifest ? await applyManifest(loaded, manifest) : loaded;
   const pages = doc.getPages();
 
   // Embed each standard font at most once and reuse it across annotations.
@@ -252,7 +258,7 @@ export async function exportAnnotatedPdf(
 }
 
 /** Swap a path's extension for `suffix` (e.g. "/a/b.pdf" + "-unlocked.pdf" → "/a/b-unlocked.pdf"). */
-function withSuffix(filePath: string, suffix: string): string {
+export function withSuffix(filePath: string, suffix: string): string {
   const dot = filePath.lastIndexOf(".");
   return (dot > 0 ? filePath.slice(0, dot) : filePath) + suffix;
 }

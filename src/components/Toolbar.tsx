@@ -14,6 +14,7 @@ import {
   IconRedo,
   IconSettings,
   IconPen,
+  IconPages,
 } from "./icons";
 
 function Btn({
@@ -67,6 +68,9 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
   const mdDirty = useViewer((s) => s.mdDirty);
   const toggleMdEdit = useViewer((s) => s.toggleMdEdit);
   const saveMd = useViewer((s) => s.saveMd);
+  const organizeOpen = useViewer((s) => s.organizeOpen);
+  const setOrganizeOpen = useViewer((s) => s.setOrganizeOpen);
+  const pageEdits = useViewer((s) => s.hasPageEdits());
   const canUndo = useAnnotations((s) => s.past.length > 0);
   const canRedo = useAnnotations((s) => s.future.length > 0);
   const undo = useAnnotations((s) => s.undo);
@@ -178,8 +182,35 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
         </Btn>
       )}
       {doc && (
-        <Btn title={saving ? "Saving…" : "Save annotated PDF"} onClick={onSave}>
-          <IconSaveDisk className={saving ? "animate-pulse" : undefined} />
+        <Btn
+          title="Organize pages (remove & reorder)"
+          onClick={() => {
+            const next = !organizeOpen;
+            setOrganizeOpen(next);
+            if (next && !layout.sidebarOpen) toggleSidebar(); // the organizer lives in the sidebar
+          }}
+          active={organizeOpen}
+        >
+          <IconPages />
+        </Btn>
+      )}
+      {doc && (
+        <Btn
+          title={
+            saving
+              ? "Saving…"
+              : pageEdits
+                ? "Save PDF with page edits"
+                : "Save annotated PDF"
+          }
+          onClick={onSave}
+        >
+          <span className="relative">
+            <IconSaveDisk className={saving ? "animate-pulse" : undefined} />
+            {pageEdits && !saving && (
+              <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-accent" />
+            )}
+          </span>
         </Btn>
       )}
       <Btn title="Settings" onClick={onOpenSettings}>
