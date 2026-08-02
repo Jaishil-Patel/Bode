@@ -68,6 +68,17 @@ export const IconEdit = (p: P) =>
   svg(<><path d="M3 5.5h10" /><path d="M3 12h7" /><path d="M3 18.5h10" /><path d="M19 5v14" /><path d="M17 5h4" /><path d="M17 19h4" /></>, p.className);
 export const IconSignature = (p: P) =>
   svg(<><path d="M3 17c2 0 3-7 5-7s1 5 3 5 2-8 4-8 2 6 4 6" /><path d="M3 21h18" /></>, p.className);
+// Shield: the HTML sandbox. Struck through while a page is trusted (scripts allowed).
+export const IconShield = (p: P) =>
+  svg(<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" />, p.className);
+export const IconShieldOff = (p: P) =>
+  svg(
+    <>
+      <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" />
+      <path d="M4 4l16 16" />
+    </>,
+    p.className,
+  );
 // Save (floppy disk): writing a file in place — used for Markdown and annotated-PDF saves.
 export const IconSaveDisk = (p: P) =>
   svg(<><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><path d="M17 21v-8H7v8" /><path d="M7 3v5h8" /></>, p.className);

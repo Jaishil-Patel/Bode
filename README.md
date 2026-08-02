@@ -2,7 +2,7 @@
 
 Do you hate the ads and bloating some other pdf apps have, I've got the perfect alternative for you ;).
 
-A clean, fast, customizable PDF reader **and** annotator — that also opens and edits Markdown — running on desktop (Windows/macOS/Linux) and Android, built with Tauri + React.
+A clean, fast, customizable PDF reader **and** annotator — that also opens and edits Markdown and HTML — running on desktop (Windows/macOS/Linux) and Android, built with Tauri + React.
 
 **Bode is free and open source.** Contributions are welcome — whether that's fixing a bug, adding a feature, improving the docs, or just opening an issue with an idea. See [Contributing](#contributing) below to get started.
 
@@ -39,6 +39,21 @@ A clean, fast, customizable PDF reader **and** annotator — that also opens and
   toggle-back, and save straight to the original file (`Ctrl+S`). External links open in your
   browser, not in the app.
 
+### HTML
+- **View HTML** — open any `.html` / `.htm` file and see the page as it was written, with its own
+  styles and layout, rather than re-themed.
+- **Sandboxed by default** — the page is rendered in a frame with scripts, forms, popups and
+  navigation disabled, and Bode's strict CSP blocks remote resources. Opening an untrusted HTML
+  file can't run anything.
+- **Trusted pages** — a page that builds its UI in JavaScript is a blank shell in the sandbox, so
+  the shield button in the toolbar lets you trust the open file and run it: scripts execute,
+  `localStorage` persists across restarts, and relative images/stylesheets resolve. The choice is
+  remembered, so a local tool you use often just opens working; click the shield again to sandbox
+  it and forget it. Trusted pages stay offline (no network), only files in that page's own folder
+  are served, and everything else is refused.
+- **Edit & save** — the same source editor and in-place save as Markdown (`Ctrl+E` / `Ctrl+S`).
+  Links in the page open in your browser.
+
 ### Platforms
 - **Desktop** — Windows, macOS, Linux.
 - **Android** — same app in a touch-friendly layout: in-app file picker, pinch-to-zoom,
@@ -69,19 +84,42 @@ npm run tauri android dev  # deploy to a connected Android device (USB debugging
 ## Build a distributable
 
 ```bash
-npm run tauri build                    # desktop installer → src-tauri/target/release/bundle/
-npm run tauri android build --apk      # Android APK → src-tauri/gen/android/app/build/outputs/apk/
+npm run release            # both platforms
+npm run release:android    # Android APK only
+npm run release:desktop    # desktop installer only
 ```
 
-Install a built APK on a connected phone with `adb install -r <path-to.apk>`.
+Everything lands in `release/`, one file per platform, stamped with the version from
+`src-tauri/tauri.conf.json`:
+
+```
+release/
+  Bode-0.2.0-android-arm64.apk
+  Bode-0.2.0-windows-x64-setup.exe
+```
+
+Each build replaces the previous file for that platform, so the folder never accumulates. Bump
+`version` in `src-tauri/tauri.conf.json` and `package.json` together to cut a new one.
+
+Install the APK on a connected phone with `adb install -r release/Bode-<version>-android-arm64.apk`.
+
+Under the hood this is `scripts/release.mjs` wrapping `tauri build` and `tauri android build`, which
+otherwise scatter their output across per-architecture Gradle flavor directories and
+`src-tauri/target/release/bundle/`. Run those directly if you need a variant the script doesn't
+cover — an `.aab` for Play, or a non-arm64 APK.
+
+The APK is a **debug** build, which is why it's large (~160 MB of unstripped native symbols). Tauri
+emits release APKs unsigned and Android refuses to install those, so a debug build is the only one
+that goes straight onto a device. Producing a small signed release APK needs a keystore you generate
+yourself with `keytool`, plus a `signingConfig` in the Gradle project.
 
 ## Keyboard shortcuts
 
 | Action | Shortcut |
 | --- | --- |
-| Open file (PDF or Markdown) | `Ctrl+O` |
-| Edit / preview Markdown | `Ctrl+E` |
-| Save Markdown | `Ctrl+S` |
+| Open file (PDF, Markdown or HTML) | `Ctrl+O` |
+| Edit / preview source (Markdown, HTML) | `Ctrl+E` |
+| Save (Markdown, HTML) | `Ctrl+S` |
 | Find in document | `Ctrl+F` |
 | Command palette | `Ctrl+K` |
 | Toggle sidebar | `Ctrl+B` |
@@ -98,7 +136,8 @@ Install a built APK on a connected phone with `adb install -r <path-to.apk>`.
 ```
 src/                 React frontend
   pdf/               PDF.js worker, document loader, page renderer, viewer, search, PDF export
-  markdown/          Markdown rendering (markdown-it) + reflowed reader / source editor view
+  markdown/          Markdown rendering (markdown-it) + reflowed reader view
+  html/              HTML tab view (sandboxed frame)
   annotations/       annotation data model (Zustand) + overlay rendering/editing layer
   components/        Toolbar, AnnotationBar, Sidebar, SearchBar, CommandPalette, SignaturePad, icons
   platform/          cross-platform file I/O (desktop commands vs Android plugin-fs)
@@ -112,11 +151,31 @@ src-tauri/           Rust shell (file reading/writing, launch-file handling, plu
 ## Architecture notes
 
 - PDF.js runs entirely in the webview; Rust is a thin native shell (file dialogs, reading/writing
-  bytes, persistence, `.pdf`/`.md` file associations). This keeps the text layer free.
-- **Markdown is a separate tab kind** alongside PDFs: the file is rendered to HTML with
-  `markdown-it` (`html: false`, so raw HTML is escaped — safe to render under the strict CSP with
-  no extra sanitizer) and shown in a reflowed reading view, or edited as plain source and written
-  back to disk. PDF-only chrome (page nav, search, annotations) is gated off for Markdown tabs.
+  bytes, persistence, `.pdf`/`.md`/`.html` file associations). This keeps the text layer free.
+- **Markdown and HTML are text tab kinds** alongside PDFs. Both are read into `textSource`, share
+  the source editor (`Ctrl+E`) and the in-place save (`Ctrl+S`), and have the PDF-only chrome
+  (page nav, search, annotations, sidebar) gated off. They differ only in how the preview is
+  produced:
+  - **Markdown** is rendered with `markdown-it` (`html: false`, so raw HTML is escaped — safe to
+    inject under the strict CSP with no extra sanitizer) into a reflowed view that follows the
+    active theme.
+  - **HTML** is shown as itself, so it goes into a `<iframe srcdoc>` rather than the app's DOM.
+    Safety comes from the `sandbox` attribute (no `allow-scripts`: no scripts, forms, popups or
+    navigation) rather than from sanitizing, with the inherited CSP blocking remote resources as
+    a second layer. `allow-same-origin` is set purely so link clicks can be intercepted and routed
+    to the OS browser — it must never be paired with `allow-scripts` on a srcdoc frame.
+- **Trusted HTML pages get their own origin.** Running a page's scripts is impossible in a srcdoc
+  frame — it inherits Bode's CSP, and `allow-scripts` there would hand the page Bode's origin. So
+  trusting a file instead serves it over the `bodehtml` custom protocol (`serve_trusted_html` in
+  `src-tauri/src/lib.rs`), which puts it on a separate origin with its own CSP and storage. What
+  contains it: the backend only serves files under a directory the user trusted this session (held
+  in memory, never persisted, canonicalized before the check so `..` can't escape); the response
+  CSP allows the page's own inline code but no network; and Tauri registers its IPC bootstrap with
+  `for_main_frame_only`, so a subframe never receives the invoke key and cannot call Bode's
+  commands. The app-side CSP needs `frame-src` to list this origin — in `index.html` **and**
+  `tauri.conf.json`, which must stay in sync. Trusted paths persist in `settings.json`, and are
+  re-registered with the backend on open — which is why `loadTextTab` awaits `settingsReady()`
+  before reading them, since a file passed at launch can start opening before hydration finishes.
 - **Annotations are an overlay model.** Highlights, pen, shapes, text, edits and signatures are
   stored as scale-independent geometry (PDF points) in `annotations.json` and rendered over the
   page. They're only baked into the file on **Save**, which flattens them into a new PDF with

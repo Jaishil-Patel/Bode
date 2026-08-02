@@ -10,6 +10,8 @@ import {
   IconFitWidth,
   IconFitPage,
   IconSaveDisk,
+  IconShield,
+  IconShieldOff,
   IconUndo,
   IconRedo,
   IconSettings,
@@ -63,11 +65,14 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
   const { layout, toggleSidebar } = useSettings();
   const filePath = useViewer((s) => s.filePath);
   const search = useViewer((s) => s.search);
-  const isMd = useViewer((s) => s.mdSource != null);
-  const mdEditing = useViewer((s) => s.mdEditing);
-  const mdDirty = useViewer((s) => s.mdDirty);
-  const toggleMdEdit = useViewer((s) => s.toggleMdEdit);
-  const saveMd = useViewer((s) => s.saveMd);
+  const textKind = useViewer((s) => s.textKind);
+  const isText = useViewer((s) => s.textSource != null);
+  const textEditing = useViewer((s) => s.textEditing);
+  const textDirty = useViewer((s) => s.textDirty);
+  const toggleTextEdit = useViewer((s) => s.toggleTextEdit);
+  const saveText = useViewer((s) => s.saveText);
+  const htmlTrusted = useViewer((s) => s.htmlTrustedUrl != null);
+  const setHtmlTrusted = useViewer((s) => s.setHtmlTrusted);
   const organizeOpen = useViewer((s) => s.organizeOpen);
   const setOrganizeOpen = useViewer((s) => s.setOrganizeOpen);
   const pageEdits = useViewer((s) => s.hasPageEdits());
@@ -97,8 +102,8 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
       className="no-select flex min-h-12 items-center gap-1 border-b border-border bg-surface px-2"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
-      {/* The sidebar (thumbnails/outline) only applies to PDFs, so hide its toggle for Markdown. */}
-      {!isMd && (
+      {/* The sidebar (thumbnails/outline) only applies to PDFs, so hide its toggle for text tabs. */}
+      {!isText && (
         <>
           <Btn title="Toggle sidebar (Ctrl+B)" onClick={toggleSidebar} active={layout.sidebarOpen}>
             <IconSidebar />
@@ -145,20 +150,38 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
       <div className="min-w-0 flex-1 truncate px-3 text-center text-sm text-muted">
         <span className="hidden sm:inline">
           {fileName ?? "Bode"}
-          {isMd && mdDirty && <span title="Unsaved changes" className="text-accent"> •</span>}
+          {isText && textDirty && <span title="Unsaved changes" className="text-accent"> •</span>}
         </span>
       </div>
 
-      {isMd && (
+      {textKind === "html" && (
+        <Btn
+          title={
+            htmlTrusted
+              ? "Scripts are running — click to sandbox this page again and forget it"
+              : "Sandboxed: scripts are blocked. Click to trust this page and let it run (remembered)."
+          }
+          onClick={() => setHtmlTrusted(!htmlTrusted)}
+          active={htmlTrusted}
+        >
+          {htmlTrusted ? <IconShieldOff /> : <IconShield />}
+        </Btn>
+      )}
+
+      {isText && (
         <>
           <Btn
-            title={mdEditing ? "Done editing (preview)" : "Edit Markdown (Ctrl+E)"}
-            onClick={() => toggleMdEdit()}
-            active={mdEditing}
+            title={
+              textEditing
+                ? "Done editing (preview)"
+                : `Edit ${textKind === "html" ? "HTML" : "Markdown"} (Ctrl+E)`
+            }
+            onClick={() => toggleTextEdit()}
+            active={textEditing}
           >
             <IconPen />
           </Btn>
-          <Btn title="Save (Ctrl+S)" onClick={saveMd} disabled={!mdDirty}>
+          <Btn title="Save (Ctrl+S)" onClick={saveText} disabled={!textDirty}>
             <IconSaveDisk />
           </Btn>
           <div className="mx-1 h-6 w-px bg-border" />

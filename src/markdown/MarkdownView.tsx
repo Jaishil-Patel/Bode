@@ -1,31 +1,20 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useViewer } from "../store/viewerStore";
+import SourceEditor from "../components/SourceEditor";
 
 /**
- * Markdown tab view. Shows the reflowed, themed preview by default and swaps to a plain-text
- * source editor when `mdEditing` is on (toggled from the toolbar / Ctrl+E). The rendered HTML is
+ * Markdown tab view. Shows the reflowed, themed preview by default and swaps to the source
+ * editor when `textEditing` is on (toggled from the toolbar / Ctrl+E). The rendered HTML is
  * pre-escaped in the store by renderMarkdown. PDF-specific chrome is gated on `doc` elsewhere.
  */
 export default function MarkdownView() {
-  const mdHtml = useViewer((s) => s.mdHtml);
-  const mdSource = useViewer((s) => s.mdSource);
-  const editing = useViewer((s) => s.mdEditing);
-  const setMdSource = useViewer((s) => s.setMdSource);
+  const previewHtml = useViewer((s) => s.previewHtml);
+  const textSource = useViewer((s) => s.textSource);
+  const editing = useViewer((s) => s.textEditing);
 
-  if (mdSource == null) return null; // not a Markdown tab
+  if (textSource == null) return null; // not a Markdown tab
 
-  if (editing) {
-    return (
-      <textarea
-        value={mdSource}
-        onChange={(e) => setMdSource(e.target.value)}
-        spellCheck={false}
-        autoFocus
-        className="h-full w-full resize-none bg-bg px-8 py-10 font-mono text-sm leading-relaxed text-text outline-none"
-        style={{ tabSize: 2 }}
-      />
-    );
-  }
+  if (editing) return <SourceEditor />;
 
   // A link click would otherwise navigate the whole webview away from the app (no way back).
   // Intercept anchors and hand external URLs to the OS browser instead.
@@ -43,7 +32,7 @@ export default function MarkdownView() {
       <article
         onClick={onClick}
         className="markdown-body mx-auto max-w-3xl px-8 py-10"
-        dangerouslySetInnerHTML={{ __html: mdHtml ?? "" }}
+        dangerouslySetInnerHTML={{ __html: previewHtml ?? "" }}
       />
     </div>
   );

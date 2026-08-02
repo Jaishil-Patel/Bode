@@ -35,6 +35,11 @@ interface SettingsState {
   layout: LayoutSettings;
   recents: RecentFile[];
   lastPositions: Record<string, { page: number }>;
+  /**
+   * HTML files the user has chosen to run scripts for, so the choice survives a restart instead of
+   * having to be re-made on every open. Only ever added by an explicit click on the shield toggle.
+   */
+  trustedHtml: string[];
 
   hydrate: () => Promise<void>;
   setTheme: (t: ThemeName) => void;
@@ -44,6 +49,7 @@ interface SettingsState {
   addRecent: (path: string, name: string) => void;
   clearRecents: () => void;
   savePosition: (path: string, page: number) => void;
+  setHtmlTrust: (path: string, trusted: boolean) => void;
 }
 
 const DEFAULT_LAYOUT: LayoutSettings = {
@@ -64,9 +70,17 @@ const STATE_KEY = "state";
 let storePromise: Promise<Store> | null = null;
 const getStore = () => (storePromise ??= load(STORE_FILE, { autoSave: false, defaults: {} }));
 
+let hydrateOnce: Promise<void> | null = null;
+/**
+ * Resolves once persisted settings have been read. A file handed to the app at launch can start
+ * opening before hydration finishes, so anything that must see saved state (e.g. whether an HTML
+ * file was trusted) has to await this rather than read the store directly.
+ */
+export const settingsReady = () => hydrateOnce ?? Promise.resolve();
+
 type Persisted = Pick<
   SettingsState,
-  "theme" | "customTheme" | "layout" | "recents" | "lastPositions"
+  "theme" | "customTheme" | "layout" | "recents" | "lastPositions" | "trustedHtml"
 >;
 
 function snapshot(s: SettingsState): Persisted {
@@ -76,6 +90,7 @@ function snapshot(s: SettingsState): Persisted {
     layout: s.layout,
     recents: s.recents,
     lastPositions: s.lastPositions,
+    trustedHtml: s.trustedHtml,
   };
 }
 
@@ -96,28 +111,33 @@ export const useSettings = create<SettingsState>((set, get) => ({
   layout: DEFAULT_LAYOUT,
   recents: [],
   lastPositions: {},
+  trustedHtml: [],
 
-  hydrate: async () => {
-    try {
-      const store = await getStore();
-      const saved = await store.get<Persisted>(STATE_KEY);
-      if (saved) {
-        set({
-          theme: saved.theme ?? "dark",
-          customTheme: { ...DEFAULT_CUSTOM_THEME, ...saved.customTheme },
-          layout: { ...DEFAULT_LAYOUT, ...saved.layout },
-          recents: saved.recents ?? [],
-          lastPositions: saved.lastPositions ?? {},
-        });
+  // Memoized so it runs once and, more importantly, so `settingsReady()` can hand the same promise
+  // to startup callers that must not read settings before they are loaded (see openPath).
+  hydrate: () =>
+    (hydrateOnce ??= (async () => {
+      try {
+        const store = await getStore();
+        const saved = await store.get<Persisted>(STATE_KEY);
+        if (saved) {
+          set({
+            theme: saved.theme ?? "dark",
+            customTheme: { ...DEFAULT_CUSTOM_THEME, ...saved.customTheme },
+            layout: { ...DEFAULT_LAYOUT, ...saved.layout },
+            recents: saved.recents ?? [],
+            lastPositions: saved.lastPositions ?? {},
+            trustedHtml: saved.trustedHtml ?? [],
+          });
+        }
+      } catch {
+        // Fall back to defaults.
+      } finally {
+        const s = get();
+        applyTheme(s.theme, s.customTheme);
+        set({ hydrated: true });
       }
-    } catch {
-      // Fall back to defaults.
-    } finally {
-      const s = get();
-      applyTheme(s.theme, s.customTheme);
-      set({ hydrated: true });
-    }
-  },
+    })()),
 
   setTheme: (t) => {
     set({ theme: t });
@@ -154,6 +174,12 @@ export const useSettings = create<SettingsState>((set, get) => ({
   savePosition: (path, page) => {
     set((st) => ({ lastPositions: { ...st.lastPositions, [path]: { page } } }));
     // Position writes are frequent; persist without forcing extra renders.
+    void persist(get());
+  },
+  setHtmlTrust: (path, trusted) => {
+    const without = get().trustedHtml.filter((p) => p !== path);
+    // Newest first and capped, so a long tail of one-off pages can't keep running scripts forever.
+    set({ trustedHtml: trusted ? [path, ...without].slice(0, 50) : without });
     void persist(get());
   },
 }));

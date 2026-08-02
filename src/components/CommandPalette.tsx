@@ -27,7 +27,7 @@ export default function CommandPalette({
 
   const commands = useMemo<Command[]>(() => {
     const cmds: Command[] = [
-      { id: "open", label: "Open PDF…", hint: "Ctrl+O", run: () => viewer.openWithDialog() },
+      { id: "open", label: "Open document…", hint: "Ctrl+O", run: () => viewer.openWithDialog() },
       { id: "search", label: "Find in document", hint: "Ctrl+F", run: () => viewer.toggleSearch(true) },
       { id: "sidebar", label: "Toggle sidebar", hint: "Ctrl+B", run: settings.toggleSidebar },
       { id: "fitw", label: "Fit width", run: () => viewer.setFitMode("width") },

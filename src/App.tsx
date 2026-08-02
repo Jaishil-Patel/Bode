@@ -15,6 +15,7 @@ import PasswordPrompt from "./components/PasswordPrompt";
 import SettingsPanel from "./settings/SettingsPanel";
 import PdfViewer from "./pdf/PdfViewer";
 import MarkdownView from "./markdown/MarkdownView";
+import HtmlView from "./html/HtmlView";
 import { isAndroid } from "./platform/files";
 import { IconOpen, IconPen } from "./components/icons";
 
@@ -56,7 +57,7 @@ function EmptyState() {
     <div className="flex h-full flex-col items-center justify-center gap-6 p-8">
       <div className="text-center">
         <h1 className="text-3xl font-semibold text-text">Bode</h1>
-        <p className="mt-1 text-sm text-muted">A calm, fast reader for PDF &amp; Markdown.</p>
+        <p className="mt-1 text-sm text-muted">A calm, fast reader for PDF, Markdown &amp; HTML.</p>
       </div>
       <button
         onClick={openWithDialog}
@@ -86,7 +87,7 @@ function EmptyState() {
 }
 
 export default function App() {
-  const { doc, mdHtml, loading, error, openWithDialog, openPath, zoomIn, zoomOut, resetZoom, toggleSearch, nextPage, prevPage } =
+  const { doc, textKind, loading, error, openWithDialog, openPath, zoomIn, zoomOut, resetZoom, toggleSearch, nextPage, prevPage } =
     useViewer();
   const { hydrate, layout, toggleSidebar } = useSettings();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -150,15 +151,15 @@ export default function App() {
         e.preventDefault();
         toggleSidebar();
       } else if (mod && e.key.toLowerCase() === "s") {
-        // Save the active Markdown tab (no-op / native default elsewhere).
-        if (useViewer.getState().mdSource != null) {
+        // Save the active text tab — Markdown or HTML (no-op / native default elsewhere).
+        if (useViewer.getState().textSource != null) {
           e.preventDefault();
-          useViewer.getState().saveMd();
+          useViewer.getState().saveText();
         }
       } else if (mod && e.key.toLowerCase() === "e") {
-        if (useViewer.getState().mdSource != null) {
+        if (useViewer.getState().textSource != null) {
           e.preventDefault();
-          useViewer.getState().toggleMdEdit();
+          useViewer.getState().toggleTextEdit();
         }
       } else if (mod && e.key.toLowerCase() === "z") {
         // Let inputs/textareas keep their native text undo; otherwise undo annotations.
@@ -265,7 +266,15 @@ export default function App() {
               Loading…
             </div>
           )}
-          {doc ? <PdfViewer /> : mdHtml ? <MarkdownView /> : <EmptyState />}
+          {doc ? (
+            <PdfViewer />
+          ) : textKind === "html" ? (
+            <HtmlView />
+          ) : textKind === "md" ? (
+            <MarkdownView />
+          ) : (
+            <EmptyState />
+          )}
           <SearchBar />
         </main>
       </div>

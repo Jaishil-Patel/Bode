@@ -1,7 +1,7 @@
 import { isAndroid } from "./files";
 
 /**
- * Open a PDF in a brand-new OS window (the "separate windows" open mode).
+ * Open a document in a brand-new OS window (the "separate windows" open mode).
  *
  * Each window loads the same frontend with the file path passed as a `?file=` query param,
  * which App reads on startup. We avoid a Rust round-trip by using the JS WebviewWindow API.

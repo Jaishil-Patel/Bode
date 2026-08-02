@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readPdfBytes, readTextFile, writeTextFile } from "../platform/files";
 import { openInNewWindow } from "../platform/window";
@@ -23,7 +24,7 @@ import {
 } from "../pdf/pageOps";
 import { useAnnotations } from "../annotations/useAnnotations";
 import type { PdfDocument } from "../pdf/pdfWorker";
-import { useSettings } from "../settings/useSettings";
+import { useSettings, settingsReady } from "../settings/useSettings";
 
 export type FitMode = "width" | "page" | "custom";
 
@@ -50,8 +51,15 @@ interface PasswordPrompt {
   wrong: boolean; // true once a supplied password was rejected
 }
 
-/** What kind of document a tab holds. PDFs go through PDF.js; Markdown is a reflowed reading view. */
-export type DocKind = "pdf" | "md";
+/**
+ * What kind of document a tab holds. PDFs go through PDF.js; Markdown is a reflowed reading view;
+ * HTML is shown as-is in a sandboxed frame. The latter two are "text tabs" — both are read into
+ * `textSource`, both share the source editor and the in-place save.
+ */
+export type DocKind = "pdf" | "md" | "html";
+
+/** The text-document kinds: everything that isn't a PDF. */
+export type TextKind = Exclude<DocKind, "pdf">;
 
 /** Lightweight tab descriptor shown in the tab strip. */
 export interface TabMeta {
@@ -62,19 +70,37 @@ export interface TabMeta {
 }
 
 const MD_EXTS = ["md", "markdown", "mdown", "mkd", "markdn"];
-const kindForPath = (path: string): DocKind =>
-  MD_EXTS.includes(path.split(".").pop()?.toLowerCase() ?? "") ? "md" : "pdf";
+const HTML_EXTS = ["html", "htm", "xhtml"];
+const kindForPath = (path: string): DocKind => {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  if (MD_EXTS.includes(ext)) return "md";
+  if (HTML_EXTS.includes(ext)) return "html";
+  return "pdf";
+};
 
 interface ViewerState {
   doc: PdfDocument | null;
-  /** Rendered HTML for a Markdown tab (null for PDF tabs). Drives the reflowed reading view. */
-  mdHtml: string | null;
-  /** Raw Markdown source for a Markdown tab (null for PDF tabs). Edited in the source editor. */
-  mdSource: string | null;
-  /** True while a Markdown tab shows the source editor instead of the rendered preview. */
-  mdEditing: boolean;
-  /** True when the Markdown source has unsaved edits. */
-  mdDirty: boolean;
+  /** Which text view a non-PDF tab uses, and the discriminator App renders off. Null for PDF tabs. */
+  textKind: TextKind | null;
+  /** Raw file text for a Markdown or HTML tab (null for PDF tabs). Edited in the source editor. */
+  textSource: string | null;
+  /**
+   * Rendered HTML for a Markdown tab, driving the reflowed reading view. Null for HTML tabs —
+   * those need no render step, the sandboxed frame takes `textSource` directly.
+   */
+  previewHtml: string | null;
+  /** True while a text tab shows the source editor instead of the preview. */
+  textEditing: boolean;
+  /** True when the source has unsaved edits. */
+  textDirty: boolean;
+  /**
+   * Set when the user has trusted this HTML tab, letting its scripts run. Holds the `bodehtml://`
+   * URL the backend serves the file from; null means the default scriptless sandbox. Never
+   * persisted — trust is per tab, for this session only.
+   */
+  htmlTrustedUrl: string | null;
+  /** Bumped after a save so a trusted frame reloads instead of showing the pre-edit page. */
+  htmlReloadNonce: number;
   fileName: string | null;
   filePath: string | null;
   /**
@@ -132,9 +158,11 @@ interface ViewerState {
   closeTab: (id: string) => void;
   close: () => void;
 
-  toggleMdEdit: (on?: boolean) => void;
-  setMdSource: (text: string) => void;
-  saveMd: () => Promise<void>;
+  toggleTextEdit: (on?: boolean) => void;
+  setTextSource: (text: string) => void;
+  saveText: () => Promise<void>;
+  /** Turn "trusted page" mode on/off for the active HTML tab. */
+  setHtmlTrusted: (on: boolean) => Promise<void>;
 
   setFitMode: (m: FitMode) => void;
   zoomIn: () => void;
@@ -164,10 +192,13 @@ let searchToken = 0;
 type TabSnapshot = Pick<
   ViewerState,
   | "doc"
-  | "mdHtml"
-  | "mdSource"
-  | "mdEditing"
-  | "mdDirty"
+  | "textKind"
+  | "textSource"
+  | "previewHtml"
+  | "textEditing"
+  | "textDirty"
+  | "htmlTrustedUrl"
+  | "htmlReloadNonce"
   | "fileName"
   | "filePath"
   | "numPages"
@@ -203,10 +234,13 @@ function captureActive(get: () => ViewerState): TabSnapshot {
   const s = get();
   return {
     doc: s.doc,
-    mdHtml: s.mdHtml,
-    mdSource: s.mdSource,
-    mdEditing: s.mdEditing,
-    mdDirty: s.mdDirty,
+    textKind: s.textKind,
+    textSource: s.textSource,
+    previewHtml: s.previewHtml,
+    textEditing: s.textEditing,
+    textDirty: s.textDirty,
+    htmlTrustedUrl: s.htmlTrustedUrl,
+    htmlReloadNonce: s.htmlReloadNonce,
     fileName: s.fileName,
     filePath: s.filePath,
     numPages: s.numPages,
@@ -224,10 +258,13 @@ function captureActive(get: () => ViewerState): TabSnapshot {
 
 const EMPTY_DOC_STATE = {
   doc: null,
-  mdHtml: null as string | null,
-  mdSource: null as string | null,
-  mdEditing: false,
-  mdDirty: false,
+  textKind: null as TextKind | null,
+  textSource: null as string | null,
+  previewHtml: null as string | null,
+  textEditing: false,
+  textDirty: false,
+  htmlTrustedUrl: null as string | null,
+  htmlReloadNonce: 0,
   fileName: null,
   filePath: null,
   numPages: 0,
@@ -264,10 +301,13 @@ async function buildPdfSnapshot(
 
   return {
     doc,
-    mdHtml: null,
-    mdSource: null,
-    mdEditing: false,
-    mdDirty: false,
+    textKind: null,
+    textSource: null,
+    previewHtml: null,
+    textEditing: false,
+    textDirty: false,
+    htmlTrustedUrl: null,
+    htmlReloadNonce: 0,
     fileName: name,
     filePath: path,
     numPages: doc.numPages,
@@ -283,15 +323,32 @@ async function buildPdfSnapshot(
   };
 }
 
-/** Read a Markdown file and render it to HTML for the reflowed reading view. */
-async function loadMarkdownTab(path: string, name: string): Promise<TabSnapshot> {
+/**
+ * Read a text document. Markdown is rendered up front for the reflowed reading view; HTML is kept
+ * as source only — HtmlView hands it straight to a sandboxed frame, so there is nothing to render.
+ */
+async function loadTextTab(path: string, name: string, kind: TextKind): Promise<TabSnapshot> {
   const source = await readTextFile(path);
+
+  // Re-apply a trust decision the user made in an earlier session. The backend's allowlist is
+  // in-memory, so this also re-registers the file's directory for the protocol handler.
+  let htmlTrustedUrl: string | null = null;
+  if (kind === "html") {
+    await settingsReady(); // a launch-file open can beat hydration; don't read settings too early
+    if (useSettings.getState().trustedHtml.includes(path)) {
+      htmlTrustedUrl = await invoke<string>("trust_html_file", { path }).catch(() => null);
+    }
+  }
+
   return {
     doc: null,
-    mdHtml: renderMarkdown(source),
-    mdSource: source,
-    mdEditing: false,
-    mdDirty: false,
+    textKind: kind,
+    textSource: source,
+    previewHtml: kind === "md" ? renderMarkdown(source) : null,
+    textEditing: false,
+    textDirty: false,
+    htmlTrustedUrl,
+    htmlReloadNonce: 0,
     fileName: name,
     filePath: path,
     numPages: 0,
@@ -341,10 +398,13 @@ function commitPages(
 
 export const useViewer = create<ViewerState>((set, get) => ({
   doc: null,
-  mdHtml: null,
-  mdSource: null,
-  mdEditing: false,
-  mdDirty: false,
+  textKind: null,
+  textSource: null,
+  previewHtml: null,
+  textEditing: false,
+  textDirty: false,
+  htmlTrustedUrl: null,
+  htmlReloadNonce: 0,
   fileName: null,
   filePath: null,
   numPages: 0,
@@ -374,9 +434,10 @@ export const useViewer = create<ViewerState>((set, get) => ({
     const selected = await openDialog({
       multiple: true,
       filters: [
-        { name: "Documents", extensions: ["pdf", "md", "markdown"] },
+        { name: "Documents", extensions: ["pdf", "md", "markdown", "html", "htm"] },
         { name: "PDF", extensions: ["pdf"] },
         { name: "Markdown", extensions: ["md", "markdown"] },
+        { name: "HTML", extensions: ["html", "htm"] },
       ],
     });
     const paths = Array.isArray(selected) ? selected : typeof selected === "string" ? [selected] : [];
@@ -394,7 +455,7 @@ export const useViewer = create<ViewerState>((set, get) => ({
     }
 
     // Separate-windows mode: once this window has a document, send further files to new windows.
-    if (layout.openMode === "windows" && (get().doc || get().mdHtml)) {
+    if (layout.openMode === "windows" && (get().doc || get().textKind)) {
       if (await openInNewWindow(path)) return;
       // If a new window couldn't be created, fall through and open as a tab instead.
     }
@@ -416,8 +477,8 @@ export const useViewer = create<ViewerState>((set, get) => ({
 
     try {
       let loaded: TabSnapshot;
-      if (kind === "md") {
-        loaded = await loadMarkdownTab(path, name);
+      if (kind !== "pdf") {
+        loaded = await loadTextTab(path, name, kind);
       } else {
         const data = await readPdfBytes(path);
         try {
@@ -615,26 +676,52 @@ export const useViewer = create<ViewerState>((set, get) => ({
     if (id) get().closeTab(id);
   },
 
-  toggleMdEdit: (on) => {
-    if (get().mdSource == null) return; // not a Markdown tab
-    const next = on ?? !get().mdEditing;
-    // Leaving the editor: re-render the preview from the (possibly edited) source.
-    if (!next && get().mdEditing) set({ mdHtml: renderMarkdown(get().mdSource ?? "") });
-    set({ mdEditing: next });
+  toggleTextEdit: (on) => {
+    const { textKind, textSource, textEditing } = get();
+    if (textSource == null) return; // not a text tab
+    const next = on ?? !textEditing;
+    // Leaving the editor: re-render the Markdown preview from the (possibly edited) source.
+    // HTML needs no equivalent — its frame reads `textSource` directly.
+    if (!next && textEditing && textKind === "md") set({ previewHtml: renderMarkdown(textSource) });
+    set({ textEditing: next });
   },
-  setMdSource: (text) => {
-    if (get().mdSource == null) return;
-    set({ mdSource: text, mdDirty: true });
+  setTextSource: (text) => {
+    if (get().textSource == null) return;
+    set({ textSource: text, textDirty: true });
   },
-  saveMd: async () => {
-    const { filePath, mdSource, mdDirty } = get();
-    if (!filePath || mdSource == null || !mdDirty) return;
+  saveText: async () => {
+    const { filePath, textKind, textSource, textDirty, htmlTrustedUrl, htmlReloadNonce } = get();
+    if (!filePath || textSource == null || !textDirty) return;
     try {
-      await writeTextFile(filePath, mdSource);
-      // Refresh the preview to match exactly what's now on disk, and clear the dirty flag.
-      set({ mdDirty: false, mdHtml: renderMarkdown(mdSource) });
+      await writeTextFile(filePath, textSource);
+      // Refresh the preview to match exactly what's now on disk, and clear the dirty flag. A
+      // trusted frame reads the file over the protocol, so it needs a reload rather than a re-render.
+      set({
+        textDirty: false,
+        ...(textKind === "md" ? { previewHtml: renderMarkdown(textSource) } : {}),
+        ...(htmlTrustedUrl ? { htmlReloadNonce: htmlReloadNonce + 1 } : {}),
+      });
     } catch (e) {
       set({ error: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  },
+
+  setHtmlTrusted: async (on) => {
+    const { textKind, filePath } = get();
+    if (textKind !== "html" || !filePath) return;
+    if (!on) {
+      set({ htmlTrustedUrl: null });
+      useSettings.getState().setHtmlTrust(filePath, false);
+      return;
+    }
+    try {
+      // The backend registers the file's directory as trusted and hands back the URL to load.
+      const url = await invoke<string>("trust_html_file", { path: filePath });
+      set({ htmlTrustedUrl: url, error: null });
+      // Remember the choice so the page just works the next time it's opened.
+      useSettings.getState().setHtmlTrust(filePath, true);
+    } catch (e) {
+      set({ error: `Could not run this page: ${e instanceof Error ? e.message : String(e)}` });
     }
   },
 
