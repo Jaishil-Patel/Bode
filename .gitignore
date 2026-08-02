@@ -5,6 +5,7 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+release/
 
 # logs / os
 *.log
@@ -14,7 +15,4 @@ Thumbs.db
 # env
 .env
 .env.local
-
-# editor / local tooling
-.claude/
 
