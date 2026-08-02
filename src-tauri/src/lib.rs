@@ -87,6 +87,8 @@ fn apply_caption(window: &tauri::WebviewWindow, caption: u32, text: u32) {
     }
 }
 
+// Only the Windows caption code consumes this, so it's dead weight on every other target.
+#[cfg(windows)]
 #[inline]
 fn colorref(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
@@ -151,6 +153,9 @@ pub fn run() {
                 // frontend applies the active theme's colours.
                 #[cfg(windows)]
                 apply_caption(&window, colorref(0x1a, 0x1b, 0x1e), colorref(0xe6, 0xe7, 0xea));
+                // Every use above is compiled out on a mobile release build; keep it "used" there.
+                #[cfg(not(any(debug_assertions, windows)))]
+                let _ = window;
             }
             Ok(())
         })
