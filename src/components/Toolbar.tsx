@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import { useAnnotations } from "../annotations/useAnnotations";
+import { useFullscreen } from "../store/fullscreenStore";
 import {
   IconSidebar,
   IconSearch,
@@ -17,6 +18,7 @@ import {
   IconSettings,
   IconPen,
   IconPages,
+  IconZen,
 } from "./icons";
 
 function Btn({
@@ -73,6 +75,7 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
   const saveText = useViewer((s) => s.saveText);
   const htmlTrusted = useViewer((s) => s.htmlTrustedUrl != null);
   const setHtmlTrusted = useViewer((s) => s.setHtmlTrusted);
+  const toggleFullscreen = useFullscreen((s) => s.toggleFullscreen);
   const organizeOpen = useViewer((s) => s.organizeOpen);
   const setOrganizeOpen = useViewer((s) => s.setOrganizeOpen);
   const pageEdits = useViewer((s) => s.hasPageEdits());
@@ -234,6 +237,11 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
               <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-accent" />
             )}
           </span>
+        </Btn>
+      )}
+      {(doc || isText) && (
+        <Btn title="Fullscreen (F11)" onClick={toggleFullscreen}>
+          <IconZen />
         </Btn>
       )}
       <Btn title="Settings" onClick={onOpenSettings}>

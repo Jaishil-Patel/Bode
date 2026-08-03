@@ -99,6 +99,27 @@ fn mime_for(path: &Path) -> &'static str {
     }
 }
 
+/// Appended to trusted HTML documents. The page has its own origin, so key presses inside it never
+/// reach Bode's window; this forwards just the fullscreen keys, which is what makes F11 work there
+/// the way it does in the sandboxed frame (HtmlView listens for the message). Appending *after* the
+/// document, rather than injecting into <head>, keeps the doctype — and so standards mode — intact.
+const KEY_FORWARDER: &[u8] = b"<script>(function(){addEventListener('keydown',function(e){\
+if(e.key!=='F11'&&e.key!=='Escape')return;\
+try{top.postMessage({__bode:'key',key:e.key},'*')}catch(_){}\
+if(e.key==='F11')e.preventDefault();},true);})();</script>";
+
+/// Whether a request is for a document to display, as opposed to a subresource or something the
+/// page fetched itself — only the former should get the key forwarder appended. An engine that
+/// sends no `Sec-Fetch-Dest` counts as a document: a stray script tag is a far smaller problem
+/// than a fullscreen key that silently does nothing.
+fn is_document_request(request: &tauri::http::Request<Vec<u8>>) -> bool {
+    request
+        .headers()
+        .get("Sec-Fetch-Dest")
+        .and_then(|v| v.to_str().ok())
+        .map_or(true, |d| matches!(d, "document" | "iframe" | "frame"))
+}
+
 fn deny(status: u16, msg: &str) -> tauri::http::Response<Cow<'static, [u8]>> {
     tauri::http::Response::builder()
         .status(status)
@@ -131,14 +152,19 @@ fn serve_trusted_html<R: tauri::Runtime>(
         return deny(403, "This file is not part of a trusted page.");
     }
 
-    let body = match std::fs::read(&file) {
+    let mut body = match std::fs::read(&file) {
         Ok(b) => b,
         Err(_) => return deny(404, "Not found"),
     };
 
+    let mime = mime_for(&file);
+    if mime.starts_with("text/html") && is_document_request(&request) {
+        body.extend_from_slice(KEY_FORWARDER);
+    }
+
     tauri::http::Response::builder()
         .status(200)
-        .header("Content-Type", mime_for(&file))
+        .header("Content-Type", mime)
         // The page may run its own inline code, but only against itself — no network, no framing
         // of anything else. This is the document's own policy; Bode's CSP does not apply here.
         .header(

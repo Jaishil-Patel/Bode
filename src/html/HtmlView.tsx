@@ -1,6 +1,7 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useViewer } from "../store/viewerStore";
+import { handleFullscreenKey } from "../store/fullscreenStore";
 import SourceEditor from "../components/SourceEditor";
 
 /**
@@ -27,13 +28,21 @@ export default function HtmlView() {
   const trustedUrl = useViewer((s) => s.htmlTrustedUrl);
   const reloadNonce = useViewer((s) => s.htmlReloadNonce);
 
-  // A link click would otherwise be silently swallowed by the sandbox. Mirror MarkdownView and
-  // hand external URLs to the OS browser instead. This is the only reason for `allow-same-origin`
-  // in sandboxed mode (it's what makes contentDocument reachable) — see the warning below.
-  const installLinkHandler = useCallback((e: React.SyntheticEvent<HTMLIFrameElement>) => {
+  // Listeners installed from *this* realm onto the frame's document — the frame runs no scripts of
+  // its own. A link click would otherwise be silently swallowed by the sandbox, so mirror
+  // MarkdownView and hand external URLs to the OS browser. Reaching contentDocument at all is the
+  // only reason for `allow-same-origin` in sandboxed mode — see the warning below.
+  const installFrameHandlers = useCallback((e: React.SyntheticEvent<HTMLIFrameElement>) => {
     try {
       const doc = e.currentTarget.contentDocument;
       if (!doc) return;
+
+      // Keys pressed while the frame has focus never reach the app window on their own. Forward
+      // the fullscreen ones so F11 works no matter where the user last clicked.
+      doc.addEventListener("keydown", (ev) => {
+        if (handleFullscreenKey(ev.key)) ev.preventDefault();
+      });
+
       doc.addEventListener("click", (ev) => {
         const anchor = (ev.target as HTMLElement | null)?.closest?.("a");
         const href = anchor?.getAttribute("href");
@@ -45,6 +54,18 @@ export default function HtmlView() {
     } catch {
       // Document not reachable — links are simply inert, which is the safe outcome.
     }
+  }, []);
+
+  // A trusted page sits on its own origin, so neither its keys nor its document are reachable from
+  // here. It is served with a small forwarder (see serve_trusted_html in lib.rs) that posts the
+  // fullscreen keys up to this window instead.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data as { __bode?: string; key?: string } | null;
+      if (data && data.__bode === "key" && typeof data.key === "string") handleFullscreenKey(data.key);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
   }, []);
 
   if (textSource == null) return null; // not an HTML tab
@@ -79,7 +100,7 @@ export default function HtmlView() {
       // would give the page full access to Bode's own origin and defeat the sandbox entirely.
       // Running scripts is what trusted mode above is for, on a separate origin.
       sandbox="allow-same-origin"
-      onLoad={installLinkHandler}
+      onLoad={installFrameHandlers}
       className={frameClass}
     />
   );

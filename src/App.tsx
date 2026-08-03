@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useViewer } from "./store/viewerStore";
 import { useSettings } from "./settings/useSettings";
+import { useFullscreen } from "./store/fullscreenStore";
 import { useAnnotations } from "./annotations/useAnnotations";
 import Toolbar from "./components/Toolbar";
 import TabBar from "./components/TabBar";
@@ -42,6 +43,24 @@ function ShowToolsButton() {
     >
       <IconPen />
     </button>
+  );
+}
+
+/** Browser-style "press Esc to exit" toast, shown briefly each time fullscreen is entered. */
+function FullscreenHint() {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setVisible(false), 2400);
+    return () => clearTimeout(t);
+  }, []);
+  if (!visible) return null;
+  return (
+    <div
+      className="no-select animate-fade-in pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full border border-white/15 px-4 py-2 text-sm text-text shadow-2xl backdrop-blur-2xl"
+      style={{ background: "color-mix(in srgb, var(--surface) 62%, transparent)" }}
+    >
+      Press F11 or Esc to exit fullscreen
+    </div>
   );
 }
 
@@ -90,6 +109,7 @@ export default function App() {
   const { doc, textKind, loading, error, openWithDialog, openPath, zoomIn, zoomOut, resetZoom, toggleSearch, nextPage, prevPage } =
     useViewer();
   const { hydrate, layout, toggleSidebar } = useSettings();
+  const fullscreen = useFullscreen((s) => s.fullscreen);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -137,6 +157,30 @@ export default function App() {
       const mod = e.ctrlKey || e.metaKey;
       const target = e.target as HTMLElement;
       const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+
+      // F11 is unambiguous — nothing else wants it — so it toggles fullscreen from anywhere.
+      // Pressed inside an HTML frame it never reaches this listener; HtmlView handles that case.
+      if (e.key === "F11") {
+        e.preventDefault();
+        useFullscreen.getState().toggleFullscreen();
+        return;
+      }
+      // Escape unwinds one layer at a time, the way a browser does: anything modal sitting on top
+      // of the document claims it first (each of those closes itself), and only a bare view exits
+      // fullscreen. Without this, one Escape would close the search AND drop out of fullscreen.
+      if (e.key === "Escape" && useFullscreen.getState().fullscreen) {
+        const overlayOpen =
+          paletteOpen ||
+          settingsOpen ||
+          useViewer.getState().search.open ||
+          useViewer.getState().passwordPrompt != null ||
+          useAnnotations.getState().signaturePadOpen;
+        if (!overlayOpen) {
+          e.preventDefault();
+          useFullscreen.getState().setFullscreen(false);
+          return;
+        }
+      }
 
       if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -220,7 +264,19 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openWithDialog, toggleSearch, toggleSidebar, zoomIn, zoomOut, resetZoom, nextPage, prevPage, layout.continuous]);
+  }, [
+    openWithDialog,
+    toggleSearch,
+    toggleSidebar,
+    zoomIn,
+    zoomOut,
+    resetZoom,
+    nextPage,
+    prevPage,
+    layout.continuous,
+    paletteOpen,
+    settingsOpen,
+  ]);
 
   // The window is created with zoomHotkeysEnabled so WebView2 forwards trackpad pinches to the
   // page at all (it suppresses them otherwise). The flip side is that an unhandled pinch would
@@ -245,13 +301,21 @@ export default function App() {
     };
   }, []);
 
-  const showSidebar = doc && layout.sidebarOpen;
+  const showSidebar = doc && layout.sidebarOpen && !fullscreen;
 
   return (
     <div className="flex h-full flex-col bg-bg">
-      <Toolbar onOpenSettings={() => setSettingsOpen(true)} />
-      <TabBar />
+      {/* Fullscreen drops the window chrome so only the document is left. */}
+      {!fullscreen && (
+        <>
+          <Toolbar onOpenSettings={() => setSettingsOpen(true)} />
+          <TabBar />
+        </>
+      )}
+      {/* The annotation tools stay: they already float over the page and collapse to a single pill,
+          so they're not the kind of chrome fullscreen is meant to clear away. */}
       {doc && (layout.annotationsHidden ? <ShowToolsButton /> : <AnnotationBar />)}
+      {fullscreen && <FullscreenHint />}
 
       <div className={`flex min-h-0 flex-1 ${layout.sidebarSide === "right" ? "flex-row-reverse" : ""}`}>
         {showSidebar && <Sidebar />}

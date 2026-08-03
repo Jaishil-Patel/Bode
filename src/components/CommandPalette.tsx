@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
+import { useFullscreen } from "../store/fullscreenStore";
 import { BUILT_IN_THEMES } from "../settings/themes";
 
 interface Command {
@@ -38,6 +39,12 @@ export default function CommandPalette({
         id: "continuous",
         label: settings.layout.continuous ? "Switch to single-page view" : "Switch to continuous view",
         run: () => settings.updateLayout({ continuous: !settings.layout.continuous }),
+      },
+      {
+        id: "fullscreen",
+        label: "Fullscreen",
+        hint: "F11",
+        run: () => useFullscreen.getState().toggleFullscreen(),
       },
       { id: "settings", label: "Open settings", run: onOpenSettings },
     ];

@@ -28,3 +28,18 @@ export async function openInNewWindow(path: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Put this OS window into (or out of) real fullscreen — the F11 behaviour, where the window covers
+ * the screen and loses its title bar. Fire-and-forget: platforms without a desktop window manager
+ * (Android) simply keep their normal window, and the caller still hides the app's own chrome.
+ */
+export async function setWindowFullscreen(on: boolean): Promise<void> {
+  if (isAndroid()) return;
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().setFullscreen(on);
+  } catch {
+    // Nothing to recover from — in-app fullscreen still applies.
+  }
+}
