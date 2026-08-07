@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readPdfBytes, readTextFile, writeTextFile } from "../platform/files";
+import { baseNameOf, isRemote } from "../platform/docId";
 import { openInNewWindow } from "../platform/window";
 import { renderMarkdown } from "../markdown/renderMarkdown";
 import {
@@ -72,7 +73,9 @@ export interface TabMeta {
 const MD_EXTS = ["md", "markdown", "mdown", "mkd", "markdn"];
 const HTML_EXTS = ["html", "htm", "xhtml"];
 const kindForPath = (path: string): DocKind => {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  // Sniff the decoded file name, not the raw id: a `bode://` id is percent-encoded per segment, so
+  // reading the extension off the raw string can pick up an escape instead of the real suffix.
+  const ext = baseNameOf(path).split(".").pop()?.toLowerCase() ?? "";
   if (MD_EXTS.includes(ext)) return "md";
   if (HTML_EXTS.includes(ext)) return "html";
   return "pdf";
@@ -142,6 +145,7 @@ interface ViewerState {
 
   openWithDialog: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
+  reloadActive: () => Promise<void>;
   submitPassword: (password: string) => Promise<void>;
   cancelPassword: () => void;
   exportUnlocked: () => Promise<void>;
@@ -226,7 +230,9 @@ const newTabId = () =>
     ? crypto.randomUUID()
     : `t_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-const baseName = (path: string) => path.split(/[\\/]/).pop() ?? "document";
+// Decodes as well as splitting, so percent-escapes from a `bode://` id or a `content://` URI never
+// reach a tab title or the toolbar.
+const baseName = baseNameOf;
 const emptySearch = (): SearchState => ({ open: false, query: "", busy: false, matches: [], current: -1 });
 
 /** Snapshot the currently-active tab's live state so it can be restored later. */
@@ -296,7 +302,9 @@ async function buildPdfSnapshot(
   const vp = first.getViewport({ scale: 1 });
   const outline = await getOutline(doc).catch(() => []);
 
-  const last = useSettings.getState().lastPositions[path];
+  // Keyed by doc key so the page you stopped on carries across devices, not just across sessions.
+  const settings = useSettings.getState();
+  const last = settings.lastPositions[settings.docKey(path)];
   const startPage = last && last.page > 1 ? last.page : 1;
 
   return {
@@ -376,7 +384,9 @@ function commitPages(
   remap: ReadonlyMap<number, number>,
 ) {
   const { filePath, currentPage, search } = get();
-  if (filePath) useAnnotations.getState().remapPages(filePath, remap);
+  if (filePath) {
+    useAnnotations.getState().remapPages(useSettings.getState().docKey(filePath), remap);
+  }
 
   // Follow the page the reader was on; if it was the one removed, stay at that position in the
   // shortened document instead of jumping to the top.
@@ -502,6 +512,33 @@ export const useViewer = create<ViewerState>((set, get) => ({
     }
   },
 
+  /**
+   * Re-read the active document and replace what is on screen, keeping the tab where it is.
+   *
+   * This is what "Update" does when a paired device turns out to have newer bytes. Closing and
+   * reopening the tab would lose its place in the tab bar and, in windows mode, could open a second
+   * window for a document already on screen.
+   */
+  reloadActive: async () => {
+    const { activeTabId, filePath, fileName } = get();
+    if (!activeTabId || !filePath) return;
+    const name = fileName ?? baseName(filePath);
+    const kind = kindForPath(filePath);
+    set({ loading: true, error: null });
+    try {
+      const loaded =
+        kind === "pdf"
+          ? await buildPdfSnapshot(filePath, name, await readPdfBytes(filePath))
+          : await loadTextTab(filePath, name, kind);
+      tabStates.set(activeTabId, loaded);
+      // The user may have switched tabs while this was reading; only publish if still active.
+      if (get().activeTabId === activeTabId) set({ ...loaded, loading: false, error: null });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (get().activeTabId === activeTabId) set({ loading: false, error: msg });
+    }
+  },
+
   submitPassword: async (password) => {
     const prompt = get().passwordPrompt;
     if (!prompt) return;
@@ -555,7 +592,8 @@ export const useViewer = create<ViewerState>((set, get) => ({
   saveAnnotated: async () => {
     const path = get().filePath;
     if (!path) return;
-    const annotations = useAnnotations.getState().byFile[path] ?? [];
+    const key = useSettings.getState().docKey(path);
+    const annotations = useAnnotations.getState().byFile[key] ?? [];
     const password = pdfPasswords.get(path); // set only for PDFs unlocked this session
     // Only pass the manifest when it actually differs, so an untouched document is still saved by
     // drawing on its own pages rather than being rebuilt page by page.
@@ -709,6 +747,13 @@ export const useViewer = create<ViewerState>((set, get) => ({
   setHtmlTrusted: async (on) => {
     const { textKind, filePath } = get();
     if (textKind !== "html" || !filePath) return;
+    // A page from another device stays in the scriptless sandbox. Trusting it would hand an origin
+    // (and a persistent storage bucket) to bytes a peer supplied, and its relative images and
+    // stylesheets live on that device anyway, so they would not resolve here.
+    if (isRemote(filePath)) {
+      set({ error: "Pages from another device can't be trusted to run scripts." });
+      return;
+    }
     if (!on) {
       set({ htmlTrustedUrl: null });
       useSettings.getState().setHtmlTrust(filePath, false);
@@ -753,7 +798,10 @@ export const useViewer = create<ViewerState>((set, get) => ({
     if (p !== get().currentPage) {
       set({ currentPage: p });
       const { filePath } = get();
-      if (filePath) useSettings.getState().savePosition(filePath, p);
+      if (filePath) {
+        const settings = useSettings.getState();
+        settings.savePosition(settings.docKey(filePath), p);
+      }
     }
   },
   goToPage: (p) => {

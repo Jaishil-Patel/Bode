@@ -18,6 +18,7 @@ import PdfViewer from "./pdf/PdfViewer";
 import MarkdownView from "./markdown/MarkdownView";
 import HtmlView from "./html/HtmlView";
 import { isAndroid } from "./platform/files";
+import { DevicesDrawer, DevicesPanel, StaleBanner } from "./devices/DevicesPanel";
 import { IconOpen, IconPen } from "./components/icons";
 
 // Keep the collapsed pill anchored to the same edge as the full tools bar, so re-opening it
@@ -68,6 +69,7 @@ function EmptyState() {
   const openWithDialog = useViewer((s) => s.openWithDialog);
   const openPath = useViewer((s) => s.openPath);
   const { recents } = useSettings();
+  const [showDevices, setShowDevices] = useState(false);
   // Android hands back content:// URIs whose read permission isn't kept after the app closes, so
   // a stored recent can't be reopened — hide the list there rather than show broken entries.
   const showRecents = recents.length > 0 && !isAndroid();
@@ -101,6 +103,20 @@ function EmptyState() {
           </div>
         </div>
       )}
+
+      {/* Opening this is what starts Nearby — nothing binds a port or generates a key until then. */}
+      <div className="w-full max-w-sm">
+        {showDevices ? (
+          <DevicesPanel />
+        ) : (
+          <button
+            onClick={() => setShowDevices(true)}
+            className="w-full rounded px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-text"
+          >
+            Devices on my network…
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -112,6 +128,7 @@ export default function App() {
   const fullscreen = useFullscreen((s) => s.fullscreen);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [devicesOpen, setDevicesOpen] = useState(false);
 
   // Hydrate persisted settings + annotations and open any file the app was launched with.
   useEffect(() => {
@@ -172,6 +189,7 @@ export default function App() {
         const overlayOpen =
           paletteOpen ||
           settingsOpen ||
+          devicesOpen ||
           useViewer.getState().search.open ||
           useViewer.getState().passwordPrompt != null ||
           useAnnotations.getState().signaturePadOpen;
@@ -276,6 +294,7 @@ export default function App() {
     layout.continuous,
     paletteOpen,
     settingsOpen,
+    devicesOpen,
   ]);
 
   // The window is created with zoomHotkeysEnabled so WebView2 forwards trackpad pinches to the
@@ -308,8 +327,13 @@ export default function App() {
       {/* Fullscreen drops the window chrome so only the document is left. */}
       {!fullscreen && (
         <>
-          <Toolbar onOpenSettings={() => setSettingsOpen(true)} />
+          <Toolbar
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenDevices={() => setDevicesOpen(true)}
+          />
           <TabBar />
+          {/* Only ever visible for a document kept offline whose owner has newer bytes. */}
+          <StaleBanner />
         </>
       )}
       {/* The annotation tools stay: they already float over the page and collapse to a single pill,
@@ -347,8 +371,10 @@ export default function App() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenDevices={() => setDevicesOpen(true)}
       />
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {devicesOpen && <DevicesDrawer onClose={() => setDevicesOpen(false)} />}
       <SignaturePad />
       <PasswordPrompt />
     </div>

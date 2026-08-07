@@ -3,6 +3,7 @@ import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import { useFullscreen } from "../store/fullscreenStore";
 import { BUILT_IN_THEMES } from "../settings/themes";
+import { isRemote } from "../platform/docId";
 
 interface Command {
   id: string;
@@ -15,10 +16,12 @@ export default function CommandPalette({
   open,
   onClose,
   onOpenSettings,
+  onOpenDevices,
 }: {
   open: boolean;
   onClose: () => void;
   onOpenSettings: () => void;
+  onOpenDevices: () => void;
 }) {
   const viewer = useViewer();
   const settings = useSettings();
@@ -47,7 +50,12 @@ export default function CommandPalette({
         run: () => useFullscreen.getState().toggleFullscreen(),
       },
       { id: "settings", label: "Open settings", run: onOpenSettings },
+      { id: "devices", label: "Devices on my network", run: onOpenDevices },
     ];
+    // Sending needs something to send, and a document on another device is already there.
+    if (viewer.filePath && !isRemote(viewer.filePath)) {
+      cmds.push({ id: "send", label: "Send this document to a device…", run: onOpenDevices });
+    }
     // Page editing only applies to PDFs.
     if (viewer.doc) {
       cmds.push({
@@ -80,7 +88,7 @@ export default function CommandPalette({
       cmds.push({ id: `theme-${t.name}`, label: `Theme: ${t.label}`, run: () => settings.setTheme(t.name) });
     }
     return cmds;
-  }, [viewer, settings, onOpenSettings]);
+  }, [viewer, settings, onOpenSettings, onOpenDevices]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();

@@ -1,3 +1,5 @@
+mod peer;
+
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -312,6 +314,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(LaunchFile(Mutex::new(launch_path)))
         .manage(TrustedHtml::default())
+        .manage(peer::commands::Nearby::default())
         .register_uri_scheme_protocol("bodehtml", serve_trusted_html)
         .invoke_handler(tauri::generate_handler![
             read_file_bytes,
@@ -319,7 +322,27 @@ pub fn run() {
             decrypt_pdf,
             take_launch_file,
             trust_html_file,
-            set_titlebar_color
+            set_titlebar_color,
+            peer::commands::nearby_status,
+            peer::commands::nearby_start_sharing,
+            peer::commands::nearby_stop_sharing,
+            peer::commands::nearby_begin_pairing,
+            peer::commands::nearby_cancel_pairing,
+            peer::commands::nearby_ack_pairing,
+            peer::commands::nearby_pair,
+            peer::commands::nearby_unpair,
+            peer::commands::nearby_rename,
+            peer::commands::nearby_list,
+            peer::commands::nearby_fetch,
+            peer::commands::nearby_cancel,
+            peer::commands::nearby_pin,
+            peer::commands::nearby_cache_list,
+            peer::commands::nearby_cache_remove,
+            peer::commands::nearby_push,
+            peer::commands::nearby_set_inbox,
+            peer::commands::nearby_publish_state,
+            peer::commands::nearby_take_received,
+            peer::commands::nearby_sync_state
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -333,8 +356,21 @@ pub fn run() {
                 #[cfg(not(any(debug_assertions, windows)))]
                 let _ = window;
             }
+            // Resume a share from the last session. A no-op for anyone who has never shared, so
+            // this costs nothing — no key, no socket, no firewall prompt — until it is wanted.
+            peer::commands::restore_sharing(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Bode");
+        .build(tauri::generate_context!())
+        .expect("error while running Bode")
+        .run(|app, event| {
+            // Stop the mDNS daemon before the process unwinds. Its background thread outlives a
+            // plain drop, and tearing the app down around a running thread is what produces a
+            // native abort at exit rather than a clean quit.
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(nearby) = app.try_state::<peer::commands::Nearby>() {
+                    peer::commands::shutdown(&nearby);
+                }
+            }
+        });
 }

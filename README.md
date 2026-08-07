@@ -54,6 +54,40 @@ A clean, fast, customizable PDF reader **and** annotator — that also opens and
 - **Edit & save** — the same source editor and in-place save as Markdown (`Ctrl+E` / `Ctrl+S`).
   Links in the page open in your browser.
 
+### Nearby devices
+- **Read your desktop's documents on your phone** — share one folder on the desktop, pair the two
+  devices once, and that folder shows up on the phone. Tap a document and it opens.
+- **No account, no cloud, no server** — the two devices talk directly over your Wi-Fi. Nothing is
+  uploaded anywhere and no third party ever holds your files. It works with the internet off.
+- **Paired devices only** — each device generates a certificate on first use and pins the other's
+  during pairing. Everything is end-to-end encrypted, and an unpaired device is refused during the
+  TLS handshake, before it can send a single request. Unpairing takes effect immediately.
+- **You confirm the pairing** — both screens show the same six characters; you check they match.
+  That is what rules out someone intercepting the first exchange.
+- **Only documents are visible** — just PDF, Markdown and HTML in the folder you chose, never
+  dotfiles and never anything above it. Remote documents open read-only.
+- **Send a document the other way** — open anything on your phone and send it to the desktop, where
+  it lands in a `Received` folder inside the one being shared. A name already in use is never
+  overwritten; the copy arrives as `notes (2).pdf`.
+- **Keep documents offline** — star one and it stays on your device, readable with the other one
+  switched off. Everything else is cached: Bode holds up to 512 MB and clears the oldest first.
+  Starred documents are stored where Android's automatic cache clearing cannot reach them.
+- **Nothing changes underneath you** — a cached document is revalidated in a single round trip, so
+  reopening it usually transfers nothing at all. If the original has changed and you kept the
+  document offline, Bode says so and waits — it will not swap the pages under your annotations
+  without asking.
+- **Highlights and reading position follow you** — press Sync and annotations, notes and the page
+  you stopped on merge in both directions. Edits to different annotations both survive; the same
+  one edited on both devices resolves to the most recent. Deleting stays deleted rather than being
+  resurrected by the next sync. If the two clocks disagree badly enough to make that ordering
+  unreliable, you are told.
+- **Transfers show progress and can be cancelled** — large documents move in chunks, so a dropped
+  Wi-Fi connection resumes where it left off instead of starting over.
+- **Match another device's look** — copy the theme and recent-file list across on request. It is
+  never automatic, and your window layout and trusted-HTML list never travel.
+- **Works from anywhere over your own VPN** — it's plain IP, so Tailscale or WireGuard users can
+  reach their desktop off the local network with no extra setup and still no third party involved.
+
 ### Platforms
 - **Desktop** — Windows, macOS, Linux.
 - **Android** — same app in a touch-friendly layout: in-app file picker, pinch-to-zoom,
@@ -79,7 +113,13 @@ For Android builds, additionally:
 npm install
 npm run tauri dev          # desktop, with hot reload
 npm run tauri android dev  # deploy to a connected Android device (USB debugging on)
+
+npm test                   # frontend unit tests (annotation/settings merge, document keys)
+cargo test --manifest-path src-tauri/Cargo.toml   # Rust, including end-to-end TLS/pairing tests
 ```
+
+To try Nearby you need both halves running at once — `npm run tauri dev` on the desktop and
+`npm run tauri android dev` on a phone joined to the same Wi-Fi.
 
 ## Build a distributable
 
@@ -138,13 +178,16 @@ src/                 React frontend
   pdf/               PDF.js worker, document loader, page renderer, viewer, search, PDF export
   markdown/          Markdown rendering (markdown-it) + reflowed reader view
   html/              HTML tab view (sandboxed frame)
-  annotations/       annotation data model (Zustand) + overlay rendering/editing layer
+  annotations/       annotation data model (Zustand), cross-device merge, overlay rendering/editing
   components/        Toolbar, AnnotationBar, Sidebar, SearchBar, CommandPalette, SignaturePad, icons
-  platform/          cross-platform file I/O (desktop commands vs Android plugin-fs)
+  devices/           Nearby devices panel: pairing, device list, remote browser, transfers, sync
+  platform/          cross-platform file I/O (desktop, Android plugin-fs, paired devices), doc ids
+                     and the cross-device document key
   settings/          theme definitions, settings store, settings panel
   store/             viewer state (Zustand)
   styles/            Tailwind entry + theme tokens (CSS variables)
 src-tauri/           Rust shell (file reading/writing, launch-file handling, plugins)
+  src/peer/          Nearby devices: identity, pinned mTLS, HTTP server, mDNS, client, cache
   gen/android/       generated Android project (not committed; created by `tauri android init`)
 ```
 
@@ -180,6 +223,50 @@ src-tauri/           Rust shell (file reading/writing, launch-file handling, plu
   stored as scale-independent geometry (PDF points) in `annotations.json` and rendered over the
   page. They're only baked into the file on **Save**, which flattens them into a new PDF with
   `pdf-lib` — so the original is never touched and edits stay reversible until you export.
+- **Nearby keeps all networking in Rust.** The webview never opens a socket — it calls a command and
+  Rust does the request. That is partly forced (a webview hard-rejects the self-signed certificate a
+  LAN peer must present, with no bypass) and partly the point: Bode's CSP stays exactly as strict as
+  it was, with no `connect-src` opened up for this.
+  - A document on a peer is just a path with a different scheme, `bode://<device-id>/<rel-path>`,
+    handled by one extra branch in `src/platform/files.ts`. It fetches to a local cache file and
+    then reads that back through the ordinary local path, so `openPath`, PDF.js, the Markdown reader
+    and the annotated-PDF export are all untouched. The path is relative to the shared folder, so a
+    peer's real filesystem layout never crosses the wire.
+  - **Trust is a pinned certificate hash, not a PKI.** `sha256(cert_der)` is exactly what rustls
+    hands a verifier, so the check is a hash comparison. Signature verification is still enforced —
+    only chain-building and name-matching are replaced — so a certificate copied off the wire is
+    useless without its private key. TLS session resumption is disabled on both sides, because a
+    resumed session skips verification and would let an unpaired device keep working until its
+    ticket expired.
+  - Path containment reuses the `serve_trusted_html` pattern: reject `..`, absolute and separator-
+    bearing segments structurally, then canonicalize and verify the result is still inside the share,
+    which is what also catches a symlink pointing out of it. An incoming push is contained the same
+    way from the other end: the receiver, not the sender, decides the file name, and it must be a
+    single ordinary path segment or the transfer is refused rather than sanitised.
+  - **Documents move in bounded chunks, both directions.** No handler ever buffers a whole file, so a
+    200 MB scan costs 8 MB of memory rather than 200 on each machine. Progress, cancellation and
+    resume-after-a-dropped-connection all fall out of that rather than needing machinery of their own.
+  - **Staleness is `size-mtime`, never a content hash.** Hashing 200 MB on every open would cost more
+    than the transfer it saves. A `HEAD` returns the tag; a match means the cached copy is served with
+    no transfer at all. Cached documents live in `app_cache_dir()` and pinned ones in `app_data_dir()`,
+    which is not tidiness — Android empties the cache directory under storage pressure, so "keep
+    offline" would be a promise the OS could break. Pinning moves the bytes between the two.
+  - **A document's cross-device identity is `<device-id>/<path under the share root>`** (`docKey.ts`).
+    Absolute paths cannot work: the same PDF is `C:\Users\…` on one device and
+    `/storage/emulated/0/…` on the other, so annotations would never line up. Both sides compute the
+    key independently and get the same string. A document in no shared folder keeps its path as its
+    key and simply never syncs, because no other device could name it.
+  - **Annotation merge is a union by UUID, not a CRDT.** Annotations already carry `crypto.randomUUID`
+    ids, which is what makes identity stable across devices and removes the need for an operation log.
+    Later `updatedAt` wins; a tombstone at least as new as its annotation keeps it deleted, which is
+    the only way a merge can tell "you deleted this" from "I haven't seen it yet". Ties resolve to the
+    local copy, so merging is idempotent and order-independent — two devices converge whichever syncs
+    first. Tombstones are pruned after 90 days. `src/annotations/merge.ts` is pure and takes `now` as
+    a parameter, so all of this is tested (`npm test`).
+  - **Reading state syncs; local security decisions do not.** `trustedHtml` is never sent — it is a
+    judgement about paths on one machine, and importing another device's list would grant script
+    execution the user never agreed to here. Window layout is not sent either: a phone's sidebar and
+    page gap are wrong for a desktop. Theme and recents sync only when explicitly asked for.
 - Themes are pure CSS variables (`src/styles/themes.css`) — adding a theme is one block, no
   component changes.
 - Scroll virtualization uses a uniform page-size model (page 1's dimensions) for layout; each page

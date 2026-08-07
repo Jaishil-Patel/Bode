@@ -11,6 +11,7 @@ import {
 } from "./useAnnotations";
 
 import { isAndroid } from "../platform/files";
+import { useSettings } from "../settings/useSettings";
 
 const EMPTY: Annotation[] = [];
 
@@ -75,7 +76,11 @@ interface Props {
 type Drag = { id: string; dx: number; dy: number } | null;
 
 export default function AnnotationLayer({ filePath, pageIndex, scale, width, height }: Props) {
-  const all = useAnnotations((s) => s.byFile[filePath] ?? EMPTY);
+  // Annotations are filed under a cross-device doc key, not this device's path — so a highlight made
+  // on the desktop is found again when the same PDF is opened from the phone. For a document nobody
+  // shares, the key IS the path, and nothing changes.
+  const docKey = useSettings((s) => s.docKey(filePath));
+  const all = useAnnotations((s) => s.byFile[docKey] ?? EMPTY);
   const tool = useAnnotations((s) => s.tool);
   const selectedId = useAnnotations((s) => s.selectedId);
   const strokeWidth = useAnnotations((s) => s.strokeWidth);
@@ -126,7 +131,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     for (let i = pageAnnos.length - 1; i >= 0; i--) {
       if (pageAnnos[i].type === "text") continue;
       if (eraserHits(pageAnnos[i], p.x, p.y, tol)) {
-        remove(filePath, pageAnnos[i].id);
+        remove(docKey,pageAnnos[i].id);
         break;
       }
     }
@@ -161,7 +166,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         const w = 180;
         const h = img.width > 0 ? (w * img.height) / img.width : 80;
         const id = newId();
-        add(filePath, {
+        add(docKey,{
           id,
           pageIndex,
           type: "signature",
@@ -235,7 +240,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         }
       }
       if (rects.length) {
-        add(filePath, { id: newId(), pageIndex, type: "highlight", color: activeColor(), rects });
+        add(docKey,{ id: newId(), pageIndex, type: "highlight", color: activeColor(), rects });
         sel.removeAllRanges();
       }
     };
@@ -263,7 +268,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       clearTimeout(settle);
       document.removeEventListener("selectionchange", onSelectionChange);
     };
-  }, [tool, scale, filePath, pageIndex, add, activeColor]);
+  }, [tool, scale, docKey, pageIndex, add, activeColor]);
 
   // ---- Edit existing text (whiteout + retype) ----
   // With the edit tool the overlay stays click-through so the click lands on a text-layer
@@ -310,7 +315,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       const scaleX = natural > 0 && r.width > 0 ? r.width / natural : 1;
 
       // White cover over the original glyphs (no border).
-      add(filePath, {
+      add(docKey,{
         id: newId(),
         pageIndex,
         type: "rect",
@@ -325,7 +330,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       });
       // Editable replacement text, pre-filled with the original.
       const id = newId();
-      add(filePath, {
+      add(docKey,{
         id,
         pageIndex,
         type: "text",
@@ -346,7 +351,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     };
     document.addEventListener("click", onClick);
     return () => document.removeEventListener("click", onClick);
-  }, [tool, scale, filePath, pageIndex, add, setTool, setSelected]);
+  }, [tool, scale, docKey, pageIndex, add, setTool, setSelected]);
 
   const onPointerMove = (e: React.PointerEvent) => {
     if (erasing.current) {
@@ -380,7 +385,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       const anno: TextAnno = sized
         ? { ...t, w: t.w, h: t.h > 5 ? t.h : undefined }
         : { ...t, w: 180, h: undefined };
-      add(filePath, anno);
+      add(docKey,anno);
       setTool("select");
       setSelected(anno.id);
       setEditingId(anno.id); // ready to type immediately
@@ -392,7 +397,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       draft.type === "pen"
         ? (draft as PenAnno).points.length > 1
         : (draft as { w: number; h: number }).w > 2 || (draft as { h: number }).h > 2;
-    if (ok) add(filePath, draft);
+    if (ok) add(docKey,draft);
     setDraft(null);
     start.current = null;
   };
@@ -435,7 +440,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     const move = (ev: PointerEvent) => {
       const r = ref.current!.getBoundingClientRect();
       const w = Math.max(20, (ev.clientX - r.left) / scale - a.x);
-      update(filePath, a.id, { w, h: w * ratio } as Partial<Annotation>);
+      update(docKey,a.id, { w, h: w * ratio } as Partial<Annotation>);
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -456,7 +461,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       const r = ref.current!.getBoundingClientRect();
       const w = Math.max(40, (ev.clientX - r.left) / scale - a.x);
       const h = Math.max(a.fontSize * 1.3, (ev.clientY - r.top) / scale - a.y);
-      update(filePath, a.id, { w, h } as Partial<Annotation>);
+      update(docKey,a.id, { w, h } as Partial<Annotation>);
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -468,13 +473,13 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
 
   const translate = (a: Annotation, dx: number, dy: number) => {
     if (a.type === "pen") {
-      update(filePath, a.id, { points: a.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) });
+      update(docKey,a.id, { points: a.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) });
     } else if (a.type === "highlight") {
-      update(filePath, a.id, {
+      update(docKey,a.id, {
         rects: a.rects.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy })),
       });
     } else {
-      update(filePath, a.id, { x: a.x + dx, y: a.y + dy } as Partial<Annotation>);
+      update(docKey,a.id, { x: a.x + dx, y: a.y + dy } as Partial<Annotation>);
     }
   };
 
@@ -664,11 +669,11 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
             editing={editingId === a.id}
             interactive={tool === "select"}
             pe={annoPE}
-            onChangeText={(text) => update(filePath, a.id, { text })}
+            onChangeText={(text) => update(docKey,a.id, { text })}
             onSelect={() => setSelected(a.id)}
             onStartMove={(e) => startMove(e, a)}
             onStartResize={(e) => startResizeText(e, a)}
-            onDelete={() => remove(filePath, a.id)}
+            onDelete={() => remove(docKey,a.id)}
             onBeginEdit={() => {
               setSelected(a.id);
               setEditingId(a.id);

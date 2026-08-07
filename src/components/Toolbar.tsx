@@ -15,6 +15,7 @@ import {
   IconShieldOff,
   IconUndo,
   IconRedo,
+  IconDevices,
   IconSettings,
   IconPen,
   IconPages,
@@ -50,7 +51,13 @@ function Btn({
   );
 }
 
-export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void }) {
+export default function Toolbar({
+  onOpenSettings,
+  onOpenDevices,
+}: {
+  onOpenSettings: () => void;
+  onOpenDevices: () => void;
+}) {
   const {
     doc,
     fileName,
@@ -244,6 +251,9 @@ export default function Toolbar({ onOpenSettings }: { onOpenSettings: () => void
           <IconZen />
         </Btn>
       )}
+      <Btn title="Devices on my network" onClick={onOpenDevices}>
+        <IconDevices />
+      </Btn>
       <Btn title="Settings" onClick={onOpenSettings}>
         <IconSettings />
       </Btn>

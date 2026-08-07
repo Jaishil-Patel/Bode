@@ -10,6 +10,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { readPdfBytes, writePdfBytes } from "../platform/files";
+import { baseNameOf, isRemote } from "../platform/docId";
 import type { Annotation } from "../annotations/useAnnotations";
 import { applyManifest, type PageRef } from "./pageOps";
 
@@ -248,7 +249,7 @@ export async function exportAnnotatedPdf(
   // A decrypted save is a different artefact than a signed one — name it accordingly.
   const suffix = password ? "-unlocked.pdf" : "-edited.pdf";
   const dest = await save({
-    defaultPath: withSuffix(filePath, suffix),
+    defaultPath: suggestedSaveName(filePath, suffix),
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
   if (!dest) return false;
@@ -261,6 +262,19 @@ export async function exportAnnotatedPdf(
 export function withSuffix(filePath: string, suffix: string): string {
   const dot = filePath.lastIndexOf(".");
   return (dot > 0 ? filePath.slice(0, dot) : filePath) + suffix;
+}
+
+/**
+ * What to hand a save dialog as its starting point.
+ *
+ * A real filesystem path is passed whole, because the dialog uses its directory to decide where to
+ * open — that is the desktop behaviour we want. A `content://` URI or a `bode://` id is NOT a path:
+ * its last dot may sit inside a provider authority or a percent-escape, so `withSuffix` on the whole
+ * string produces a nonsense suggestion. Those collapse to a bare file name instead.
+ */
+function suggestedSaveName(docId: string, suffix: string): string {
+  const isPath = !isRemote(docId) && !docId.startsWith("content://");
+  return withSuffix(isPath ? docId : baseNameOf(docId), suffix);
 }
 
 /** Decrypt PDF bytes via the Rust `decrypt_pdf` command, returning the plaintext PDF bytes. */
@@ -280,7 +294,7 @@ export async function saveUnlockedPdf(filePath: string, password: string): Promi
   const bytes = await readPdfBytes(filePath);
   const out = await decryptPdfBytes(bytes, password);
   const dest = await save({
-    defaultPath: withSuffix(filePath, "-unlocked.pdf"),
+    defaultPath: suggestedSaveName(filePath, "-unlocked.pdf"),
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
   if (!dest) return false;

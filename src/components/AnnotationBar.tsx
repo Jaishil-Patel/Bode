@@ -144,6 +144,10 @@ export default function AnnotationBar() {
   const { filePath, currentPage } = useViewer();
   const updateLayout = useSettings((s) => s.updateLayout);
   const side = useSettings((s) => s.layout.toolsSide);
+  // Annotations are filed under a cross-device doc key, never the local path — see `docKey` in
+  // useSettings. Computed here rather than at each use so the two buttons below cannot drift apart
+  // from the lookup above.
+  const docKey = useSettings((s) => (filePath ? s.docKey(filePath) : null));
   const vertical = side === "left" || side === "right";
   const {
     tool,
@@ -200,7 +204,9 @@ export default function AnnotationBar() {
 
   // Colour + thickness are only shown contextually: with the pencil, or with the shape tools /
   // a selected shape. This keeps the bar uncluttered the rest of the time.
-  const selectedAnno = filePath ? (byFile[filePath] ?? []).find((a) => a.id === selectedId) : undefined;
+  const selectedAnno = docKey
+    ? (byFile[docKey] ?? []).find((a) => a.id === selectedId)
+    : undefined;
   const selectedIsShape = selectedAnno?.type === "rect" || selectedAnno?.type === "ellipse";
   const selectedText = selectedAnno?.type === "text" ? selectedAnno : undefined;
   const penContext = tool === "pen" || selectedAnno?.type === "pen";
@@ -463,14 +469,14 @@ export default function AnnotationBar() {
         <button
           title="Delete selected (Del)"
           disabled={!selectedId}
-          onClick={() => selectedId && filePath && remove(filePath, selectedId)}
+          onClick={() => selectedId && docKey && remove(docKey, selectedId)}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-text transition-colors hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent"
         >
           <IconTrash />
         </button>
         <button
           title="Clear annotations on this page"
-          onClick={() => filePath && clearPage(filePath, currentPage - 1)}
+          onClick={() => docKey && clearPage(docKey, currentPage - 1)}
           className="shrink-0 rounded-full px-2.5 py-1.5 text-xs font-medium text-text transition-colors hover:bg-white/10"
         >
           Clear

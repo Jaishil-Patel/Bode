@@ -1,7 +1,9 @@
 package com.bode.pdfviewer
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -18,10 +20,48 @@ class MainActivity : TauriActivity() {
   private var pendingPath: String? = null
   private var jsReady = false
 
+  // Android drops inbound multicast unless a lock is held, so without this mDNS discovery finds
+  // nothing at all — no error, just an empty device list. Held only while the app is in front,
+  // because it keeps the Wi-Fi chip doing more work than it otherwise would.
+  private var multicastLock: WifiManager.MulticastLock? = null
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     handleIntent(intent) // cold start: opened via "Open with" / a PDF tap
+  }
+
+  override fun onResume() {
+    super.onResume()
+    acquireMulticastLock()
+  }
+
+  override fun onPause() {
+    releaseMulticastLock()
+    super.onPause()
+  }
+
+  private fun acquireMulticastLock() {
+    if (multicastLock != null) return
+    try {
+      val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+      multicastLock = wifi.createMulticastLock("bode-nearby").apply {
+        setReferenceCounted(false)
+        acquire()
+      }
+    } catch (e: Exception) {
+      // Discovery degrades to manual address entry rather than the app failing to start.
+      Log.w("Bode", "Could not acquire multicast lock; mDNS discovery may not work", e)
+    }
+  }
+
+  private fun releaseMulticastLock() {
+    try {
+      multicastLock?.takeIf { it.isHeld }?.release()
+    } catch (e: Exception) {
+      Log.w("Bode", "Could not release multicast lock", e)
+    }
+    multicastLock = null
   }
 
   // singleTask launch mode routes a new "Open with" here while Bode is already running.

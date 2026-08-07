@@ -31,6 +31,15 @@ export const IconFitPage = (p: P) =>
   svg(<rect x="5" y="3" width="14" height="18" rx="2" />, p.className);
 export const IconSettings = (p: P) =>
   svg(<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" /></>, p.className);
+// Two devices, a laptop and a phone, side by side.
+export const IconDevices = (p: P) =>
+  svg(
+    <>
+      <path d="M3 5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v3M3 5v9h5M2 17h9" />
+      <rect x="15" y="8" width="7" height="12" rx="1" />
+    </>,
+    p.className,
+  );
 export const IconChevronUp = (p: P) => svg(<path d="m6 15 6-6 6 6" />, p.className);
 export const IconChevronDown = (p: P) => svg(<path d="m6 9 6 6 6-6" />, p.className);
 export const IconChevronRight = (p: P) => svg(<path d="m9 6 6 6-6 6" />, p.className);
