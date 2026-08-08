@@ -35,6 +35,10 @@ pub struct PeerInfo {
     pub now: u64,
     pub root_name: Option<String>,
     pub sharing: bool,
+    /// Absent from peers built before this field existed, hence the default rather than a hard
+    /// parse failure — an unknown platform is a cosmetic loss, not a reason to refuse a device.
+    #[serde(default)]
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -62,6 +66,7 @@ struct PairRequest {
     device_id: String,
     name: String,
     code: String,
+    platform: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +74,9 @@ pub struct PairResponse {
     pub device_id: String,
     pub name: String,
     pub fingerprint: String,
+    /// Absent from peers older than this field. Cosmetic, so it defaults rather than failing.
+    #[serde(default)]
+    pub platform: Option<String>,
 }
 
 /// One chunk of a document, plus what the server said about the whole thing.
@@ -176,6 +184,27 @@ impl PeerClient {
     pub async fn info(&self, addr: SocketAddr) -> Result<PeerInfo, String> {
         let reply = self.send(addr, self.get("/v1/info")?).await?;
         decode(reply.status, &reply.body)
+    }
+
+    /// Ask a peer to forget this device, because this device is about to forget it.
+    ///
+    /// Nothing is sent: the peer identifies the caller from the client certificate it has pinned,
+    /// so there is no way to ask it to forget anyone else. Must be called BEFORE removing the local
+    /// pin — afterwards this device no longer trusts the peer's certificate and cannot connect to
+    /// tell it anything.
+    pub async fn unpair(&self, addr: SocketAddr) -> Result<(), String> {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/unpair")
+            .header(header::HOST, TLS_PLACEHOLDER_NAME)
+            .body(Body::empty())
+            .map_err(|e| format!("Cannot build request: {e}"))?;
+        let reply = self.send(addr, request).await?;
+        if reply.status.is_success() {
+            Ok(())
+        } else {
+            Err(error_message(reply.status, &reply.body))
+        }
     }
 
     pub async fn list(&self, addr: SocketAddr, rel: &str) -> Result<Listing, String> {
@@ -299,6 +328,7 @@ impl PeerClient {
             device_id: device_id.to_string(),
             name: name.to_string(),
             code: code.to_string(),
+            platform: super::discovery::THIS_PLATFORM,
         })
         .map_err(|e| format!("Cannot encode pairing request: {e}"))?;
 

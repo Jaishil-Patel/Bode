@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <color name="ic_launcher_background">#fff</color>
+  <!-- The lavender of the app icon, averaged across its gradient. Android shows only the middle
+       two thirds of an adaptive icon's layers, so this is what fills the launcher's circle or
+       squircle around the artwork; leaving it white put a white ring around a lavender tile. -->
+  <color name="ic_launcher_background">#D2B4DF</color>
 </resources>

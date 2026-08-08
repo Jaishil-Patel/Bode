@@ -19,7 +19,7 @@ import MarkdownView from "./markdown/MarkdownView";
 import HtmlView from "./html/HtmlView";
 import { isAndroid } from "./platform/files";
 import { DevicesDrawer, DevicesPanel, StaleBanner } from "./devices/DevicesPanel";
-import { IconOpen, IconPen } from "./components/icons";
+import { IconOpen, IconPen, IconZenExit } from "./components/icons";
 
 // Keep the collapsed pill anchored to the same edge as the full tools bar, so re-opening it
 // reveals the bar right where the mini icon sits. Mirrors AnnotationBar's posStyle.
@@ -47,11 +47,14 @@ function ShowToolsButton() {
   );
 }
 
+/** How long the hint, in either form, stays before getting out of the way. */
+const HINT_MS = 2400;
+
 /** Browser-style "press Esc to exit" toast, shown briefly each time fullscreen is entered. */
 function FullscreenHint() {
   const [visible, setVisible] = useState(true);
   useEffect(() => {
-    const t = setTimeout(() => setVisible(false), 2400);
+    const t = setTimeout(() => setVisible(false), HINT_MS);
     return () => clearTimeout(t);
   }, []);
   if (!visible) return null;
@@ -62,6 +65,46 @@ function FullscreenHint() {
     >
       Press F11 or Esc to exit fullscreen
     </div>
+  );
+}
+
+/**
+ * The way out of fullscreen on a device with no keyboard.
+ *
+ * Fullscreen hides the toolbar, so on a phone the only exits were F11 and Escape — neither of which
+ * exists there. Entering it was a one-way door, and the toast helpfully advised pressing a key the
+ * device does not have.
+ *
+ * The hint and the affordance are the same object on purpose: a toast pointing at a button can drift
+ * away from where the button actually is, and this way there is nothing to point at. It opens
+ * labelled, then collapses to the icon so that what remains over the page is as small as the job
+ * allows.
+ */
+function FullscreenExitButton() {
+  const setFullscreen = useFullscreen((s) => s.setFullscreen);
+  const [labelled, setLabelled] = useState(true);
+
+  useEffect(() => {
+    const t = setTimeout(() => setLabelled(false), HINT_MS);
+    return () => clearTimeout(t);
+  }, []);
+
+  return (
+    <button
+      onClick={() => setFullscreen(false)}
+      title="Exit fullscreen"
+      aria-label="Exit fullscreen"
+      // Top-right, above where a top-docked annotation bar starts (safe area + 3.5rem), and clear
+      // of every other tools position — which are centred on the bottom or on a side edge.
+      className="no-select animate-fade-in fixed right-3 z-50 flex h-11 items-center gap-2 rounded-full border border-white/15 px-3.5 text-sm text-text shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150 transition-transform active:scale-95"
+      style={{
+        top: "calc(env(safe-area-inset-top) + 0.75rem)",
+        background: "color-mix(in srgb, var(--surface) 62%, transparent)",
+      }}
+    >
+      <IconZenExit />
+      {labelled && <span className="whitespace-nowrap">Exit fullscreen</span>}
+    </button>
   );
 }
 
@@ -200,6 +243,15 @@ export default function App() {
         }
       }
 
+      // The drawers are the only overlays that never closed themselves on Escape — the guard above
+      // knew about them, so Escape was swallowed and then did nothing at all.
+      if (e.key === "Escape" && (devicesOpen || settingsOpen)) {
+        e.preventDefault();
+        setDevicesOpen(false);
+        setSettingsOpen(false);
+        return;
+      }
+
       if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
@@ -330,6 +382,7 @@ export default function App() {
           <Toolbar
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenDevices={() => setDevicesOpen(true)}
+            devicesOpen={devicesOpen}
           />
           <TabBar />
           {/* Only ever visible for a document kept offline whose owner has newer bytes. */}
@@ -339,7 +392,8 @@ export default function App() {
       {/* The annotation tools stay: they already float over the page and collapse to a single pill,
           so they're not the kind of chrome fullscreen is meant to clear away. */}
       {doc && (layout.annotationsHidden ? <ShowToolsButton /> : <AnnotationBar />)}
-      {fullscreen && <FullscreenHint />}
+      {/* A phone has no F11 and no Escape, so it gets a button instead of advice about keys. */}
+      {fullscreen && (isAndroid() ? <FullscreenExitButton /> : <FullscreenHint />)}
 
       <div className={`flex min-h-0 flex-1 ${layout.sidebarSide === "right" ? "flex-row-reverse" : ""}`}>
         {showSidebar && <Sidebar />}

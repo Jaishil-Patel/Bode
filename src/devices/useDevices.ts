@@ -26,13 +26,22 @@ export interface DiscoveredDevice {
   addrs: string[];
   port: number;
   certPrefix: string;
+  /** Offering a folder to browse. Sent by Rust for paired and unpaired devices alike. */
+  sharing: boolean;
+  platform: DevicePlatform;
 }
+
+/** What kind of machine a device is, for the icon. Cosmetic — nothing is ever decided from it. */
+export type DevicePlatform = "desktop" | "mobile";
 
 export interface PairedDevice {
   deviceId: string;
   name: string;
   addedAt: number;
   online: boolean;
+  /** Offering a folder to browse. A phone is reachable but never sharing. */
+  sharing: boolean;
+  platform: DevicePlatform;
 }
 
 export interface NearbyStatus {
@@ -75,6 +84,12 @@ export interface Transfer {
   received: number;
   total: number;
   direction: "download" | "upload";
+  /** Bytes per second, smoothed. Zero until two events have arrived. */
+  rate: number;
+  /** When the previous event landed, for the next rate sample. */
+  sampledAt: number;
+  /** Bytes at that sample, so a rate can be taken without keeping a history. */
+  sampledBytes: number;
 }
 
 /** What the last fetch of a remote document reported. Mirrors Rust's `Fetched`, minus the path. */
@@ -119,6 +134,14 @@ export type PairingStage =
 interface DevicesState {
   status: NearbyStatus | null;
   error: string | null;
+  /**
+   * Something worth saying that isn't a failure.
+   *
+   * Lives in the store rather than in a component because the thing that raises it — forgetting a
+   * device that wasn't reachable to be told — destroys the card that would otherwise show it.
+   */
+  notice: string | null;
+  setNotice: (notice: string | null) => void;
   pairing: PairingStage;
 
   /** Which device's folder is being browsed, and where in it. */
@@ -140,7 +163,8 @@ interface DevicesState {
   startSharing: () => Promise<void>;
   stopSharing: () => Promise<void>;
   rename: (name: string) => Promise<void>;
-  unpair: (deviceId: string) => Promise<void>;
+  /** Forget a device. Resolves to whether the other device was reachable and told to forget back. */
+  unpair: (deviceId: string) => Promise<boolean>;
 
   beginHosting: () => Promise<void>;
   beginJoining: (target: DiscoveredDevice) => void;
@@ -168,15 +192,25 @@ interface DevicesState {
   syncWith: (deviceId: string) => Promise<void>;
   /** Take a peer's theme and reading history. Deliberately manual — see `mergeSettings`. */
   syncSettingsFrom: (deviceId: string) => Promise<void>;
-  syncing: boolean;
-  lastSync: SyncReport | null;
+  /**
+   * Which device is being synced with, or null. Per-device rather than a flag: with one card per
+   * peer, a global boolean put a spinner on every card at once and made it impossible to tell which
+   * one you had pressed.
+   */
+  syncingWith: string | null;
+  /** The last exchange with each device, keyed by device id. Not persisted — session only. */
+  lastSync: Record<string, SyncReport>;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** Module-level so a second notice replaces the first's timer rather than racing it. */
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+
 export const useDevices = create<DevicesState>((set, get) => ({
   status: null,
   error: null,
+  notice: null,
   pairing: { kind: "idle" },
   browsing: null,
   entries: [],
@@ -186,8 +220,8 @@ export const useDevices = create<DevicesState>((set, get) => ({
   fetches: {},
   cached: [],
   sending: false,
-  syncing: false,
-  lastSync: null,
+  syncingWith: null,
+  lastSync: {},
 
   refresh: async () => {
     try {
@@ -259,12 +293,34 @@ export const useDevices = create<DevicesState>((set, get) => ({
   },
 
   unpair: async (deviceId) => {
+    // Captured before the removal, because afterwards there is nothing left to read it from.
+    const name = get().status?.peers.find((p) => p.deviceId === deviceId)?.name ?? "That device";
     try {
-      await invoke("nearby_unpair", { deviceId });
+      // Rust reports whether it managed to tell the other device. A peer that was off keeps its own
+      // pin and will go on listing this one until someone unpairs there too — worth saying, because
+      // the symptom over there is a handshake failure that looks like a network fault.
+      const told = await invoke<boolean>("nearby_unpair", { deviceId });
+      if (!told) {
+        get().setNotice(
+          `${name} was forgotten here, but it wasn't reachable to be told. It will still show this ` +
+            `device as paired until you forget it there too.`,
+        );
+      }
       await get().refresh();
+      return told;
     } catch (e) {
       set({ error: message(e) });
+      return false;
     }
+  },
+
+  setNotice: (notice) => {
+    set({ notice });
+    if (noticeTimer !== null) clearTimeout(noticeTimer);
+    if (notice === null) return;
+    // Long enough to read twice. Not a modal, because nothing needs deciding — the local half of
+    // the unpair has already happened either way.
+    noticeTimer = setTimeout(() => set({ notice: null }), 12000);
   },
 
   beginHosting: async () => {
@@ -292,6 +348,10 @@ export const useDevices = create<DevicesState>((set, get) => ({
           addrs: [host],
           port: Number(port) || 0,
           certPrefix: "",
+          // Nothing is known about a device typed by hand until it answers. Both fields are
+          // cosmetic and are replaced by what the peer reports once pairing succeeds.
+          sharing: false,
+          platform: "desktop",
         },
       },
       error: null,
@@ -439,8 +499,12 @@ export const useDevices = create<DevicesState>((set, get) => ({
     if (!status) return;
     const peer = status.peers.find((p) => p.deviceId === deviceId);
 
-    set({ syncing: true, error: null });
+    set({ syncingWith: deviceId, error: null });
     try {
+      // Nothing may be read from or written to the stores until they have loaded from disk — see
+      // `whenStoresReady`. Syncing seconds after launch is exactly when a user would do it.
+      await whenStoresReady();
+
       // Anything still keyed by an absolute path is re-keyed first, or a document annotated before
       // the folder was shared would sync as a different document from the same file afterwards.
       migrateDocKeys(keyContextOf(status));
@@ -458,30 +522,34 @@ export const useDevices = create<DevicesState>((set, get) => ({
 
       applyRemoteState(outcome.documents);
 
-      set({
+      set((st) => ({
         lastSync: {
-          deviceName: peer?.name ?? "that device",
-          // Only real documents. The settings blob rides the same map under a reserved key, and
-          // counting it made an empty sync report "1 document" — which reads as a failure to show
-          // something rather than as there being nothing to show.
-          documents: Object.keys(outcome.documents).filter(isShareableKey).length,
-          clockWarning: outcome.clockSuspect
-            ? `That device's clock is ${describeSkew(outcome.skewMs)}. Where the same annotation ` +
-              `was edited on both, the wrong one may have won — check anything that looks off.`
-            : null,
-          at: Date.now(),
+          ...st.lastSync,
+          [deviceId]: {
+            deviceName: peer?.name ?? "that device",
+            // Only real documents. The settings blob rides the same map under a reserved key, and
+            // counting it made an empty sync report "1 document" — which reads as a failure to show
+            // something rather than as there being nothing to show.
+            documents: Object.keys(outcome.documents).filter(isShareableKey).length,
+            clockWarning: outcome.clockSuspect
+              ? `That device's clock is ${describeSkew(outcome.skewMs)}. Where the same annotation ` +
+                `was edited on both, the wrong one may have won — check anything that looks off.`
+              : null,
+            at: Date.now(),
+          },
         },
-      });
+      }));
     } catch (e) {
       set({ error: message(e) });
     } finally {
-      set({ syncing: false });
+      set({ syncingWith: null });
     }
   },
 
   syncSettingsFrom: async (deviceId) => {
-    set({ syncing: true, error: null });
+    set({ syncingWith: deviceId, error: null });
     try {
+      await whenStoresReady();
       const mine = syncableSettings(useSettings.getState());
       // Settings ride the same channel as reading state under a reserved key. A separate endpoint
       // would be a second thing to version, for one small object.
@@ -496,7 +564,7 @@ export const useDevices = create<DevicesState>((set, get) => ({
     } catch (e) {
       set({ error: message(e) });
     } finally {
-      set({ syncing: false });
+      set({ syncingWith: null });
     }
   },
 }));
@@ -524,6 +592,10 @@ let published: { byFile: unknown; deleted: unknown; positions: unknown; settings
   null;
 
 async function publishOwnState(force = false): Promise<void> {
+  // Publishing an un-hydrated store would tell a peer this device has almost nothing, and the peer
+  // would believe it. The subscriptions below re-run this the moment hydration completes.
+  if (!useAnnotations.getState().hydrated || !useSettings.getState().hydrated) return;
+
   const annotations = useAnnotations.getState();
   const settings = useSettings.getState();
   const signature = {
@@ -560,7 +632,36 @@ async function publishOwnState(force = false): Promise<void> {
  * the peer only learns about the initiator's work through what was pushed to it. Collecting here
  * means both devices converge, rather than each having to press the button in turn.
  */
+/**
+ * Resolve once both stores have finished loading from disk.
+ *
+ * Everything to do with syncing has to wait for this. Reading the annotation store early publishes
+ * an almost-empty set, so a peer learns nothing — but the serious half is writing: `hydrate` replaces
+ * `byFile` wholesale, so a merge that lands before it finishes is silently thrown away. Neither
+ * failure reports anything; the sync says "success" and the work is gone.
+ */
+function whenStoresReady(): Promise<void> {
+  const ready = () => useAnnotations.getState().hydrated && useSettings.getState().hydrated;
+  if (ready()) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done || !ready()) return;
+      done = true;
+      stopAnnotations();
+      stopSettings();
+      resolve();
+    };
+    const stopAnnotations = useAnnotations.subscribe(finish);
+    const stopSettings = useSettings.subscribe(finish);
+    // One store may have hydrated between the check above and these subscriptions.
+    finish();
+  });
+}
+
 async function collectPushedState(): Promise<void> {
+  await whenStoresReady();
   try {
     const documents = await invoke<Record<string, DocState>>("nearby_take_received");
     if (Object.keys(documents).length > 0) applyRemoteState(documents);
@@ -723,19 +824,47 @@ function clearTransfer(key: string) {
   }, 1200);
 }
 
+/**
+ * How much of the previous rate estimate survives each new sample.
+ *
+ * Chunks arrive unevenly — a burst of eight over the loopback, then a stall behind a slow radio —
+ * so the instantaneous rate swings by an order of magnitude between events. Smoothing hard is what
+ * makes the number readable; the cost is that it takes a second or two to reflect a real change,
+ * which for a figure a human is glancing at is the right trade.
+ */
+const RATE_SMOOTHING = 0.75;
+
 void listen<ProgressEvent>("nearby://progress", ({ payload }) => {
-  useDevices.setState((st) => ({
-    transfers: {
-      ...st.transfers,
-      [payload.docId]: {
-        key: payload.docId,
-        label: labelFor(payload.docId),
-        received: payload.received,
-        total: payload.total,
-        direction: payload.direction,
+  const now = Date.now();
+  useDevices.setState((st) => {
+    const previous = st.transfers[payload.docId];
+    // Sub-100ms gaps are dominated by scheduling noise, so they are folded into the next sample
+    // rather than producing an absurd rate.
+    const elapsed = previous ? now - previous.sampledAt : 0;
+    const moved = previous ? payload.received - previous.sampledBytes : 0;
+    const usable = previous && elapsed >= 100 && moved > 0;
+    const instant = usable ? (moved * 1000) / elapsed : 0;
+
+    return {
+      transfers: {
+        ...st.transfers,
+        [payload.docId]: {
+          key: payload.docId,
+          label: labelFor(payload.docId),
+          received: payload.received,
+          total: payload.total,
+          direction: payload.direction,
+          rate: usable
+            ? previous.rate > 0
+              ? previous.rate * RATE_SMOOTHING + instant * (1 - RATE_SMOOTHING)
+              : instant
+            : (previous?.rate ?? 0),
+          sampledAt: usable ? now : (previous?.sampledAt ?? now),
+          sampledBytes: usable ? payload.received : (previous?.sampledBytes ?? payload.received),
+        },
       },
-    },
-  }));
+    };
+  });
   if (payload.total > 0 && payload.received >= payload.total) clearTransfer(payload.docId);
 });
 
@@ -748,6 +877,42 @@ export const parentPath = (path: string): string | null => {
   const cut = path.lastIndexOf("/");
   return cut <= 0 ? "" : path.slice(0, cut);
 };
+
+/**
+ * "just now" / "4 min ago". Coarse on purpose — the exact second is never the question.
+ *
+ * Lives here with the other formatters rather than in `ui.tsx`: a module that exports both
+ * components and plain functions cannot be Fast Refreshed, so every edit to a button reloaded the
+ * whole panel's state during development.
+ */
+export function relativeTime(at: number, now = Date.now()): string {
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 45) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} ${hours === 1 ? "hour" : "hours"} ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** "2.4 MB/s". Empty while no rate is known yet, so the caller can simply omit it. */
+export function formatRate(bytesPerSecond: number): string {
+  if (!(bytesPerSecond > 0)) return "";
+  return `${formatSize(bytesPerSecond)}/s`;
+}
+
+/**
+ * Roughly how long is left. Deliberately coarse: a figure that ticks 41s, 39s, 44s reads as broken,
+ * so anything over a minute rounds to whole minutes and anything under ten seconds stops counting.
+ */
+export function formatRemaining(bytesLeft: number, bytesPerSecond: number): string {
+  if (!(bytesPerSecond > 0) || bytesLeft <= 0) return "";
+  const seconds = Math.round(bytesLeft / bytesPerSecond);
+  if (seconds <= 10) return "almost done";
+  if (seconds < 60) return `${Math.round(seconds / 5) * 5}s left`;
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} min left`;
+}
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

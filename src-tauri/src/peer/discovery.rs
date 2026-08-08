@@ -19,6 +19,14 @@ use serde::Serialize;
 
 pub const SERVICE_TYPE: &str = "_bode._tcp.local.";
 
+/// What kind of machine this is, for the other device to draw. Presentation only — nothing is ever
+/// decided from it, so a peer lying about it costs nothing but a wrong glyph.
+pub const THIS_PLATFORM: &str = if cfg!(target_os = "android") || cfg!(target_os = "ios") {
+    "mobile"
+} else {
+    "desktop"
+};
+
 /// A device seen on the network. `paired` is filled in by the caller, which knows the pin set.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +46,14 @@ pub struct Discovered {
     pub port: u16,
     /// First 16 hex characters of the peer's certificate hash, for recognising a pinned device.
     pub cert_prefix: String,
+    /// Whether this device is offering a folder to browse.
+    ///
+    /// Carried in the advertisement so the UI knows before connecting. A paired device is reachable
+    /// whether or not it shares — a phone never does — and offering to browse one that has nothing
+    /// produces a failure the user cannot act on.
+    pub sharing: bool,
+    /// `"desktop"` or `"mobile"`, for the icon the other device draws. Purely cosmetic.
+    pub platform: String,
 }
 
 pub struct Discovery {
@@ -61,6 +77,7 @@ impl Discovery {
         name: &str,
         port: u16,
         cert_prefix: &str,
+        sharing: bool,
     ) -> Result<(), String> {
         self.stop_advertising();
 
@@ -74,6 +91,8 @@ impl Discovery {
             ("name", name),
             ("v", "1"),
             ("cert", cert_prefix),
+            ("share", if sharing { "1" } else { "0" }),
+            ("p", THIS_PLATFORM),
         ];
         // The instance name must be unique on the network; the device id already is.
         let host = format!("bode-{device_id}.local.");
@@ -150,6 +169,15 @@ impl Discovery {
                                 .get_property_val_str("cert")
                                 .unwrap_or_default()
                                 .to_string(),
+                            // Absent means an older peer that only advertised when sharing, so
+                            // assuming it shares keeps that case working.
+                            sharing: properties.get_property_val_str("share").unwrap_or("1") == "1",
+                            // Only two values are drawn; anything else falls back to the desktop
+                            // glyph rather than showing nothing.
+                            platform: match properties.get_property_val_str("p") {
+                                Some("mobile") => "mobile".to_string(),
+                                _ => "desktop".to_string(),
+                            },
                         };
                         super::trace!(
                             "discovered {:?} at {:?} port {}",
@@ -200,14 +228,28 @@ impl Drop for Discovery {
     }
 }
 
-/// Real IPv4 interfaces only. Loopback would advertise an address no peer can reach.
+/// Addresses worth advertising on a local link: private IPv4 ranges and link-local, nothing else.
+///
+/// A phone has mobile data as well as Wi-Fi, and a laptop may have a VPN. Those interfaces carry
+/// addresses that no device on this link can reach, so advertising them is noise that slows the
+/// receiver's probing down — and it broadcasts the phone's cellular IP to everyone on the Wi-Fi for
+/// no benefit at all.
+///
+/// The trade-off is deliberate: a LAN that hands out genuine public addresses (some universities do)
+/// will not be discovered automatically. That is what manual address entry is for, and it is the
+/// rarer case by far.
 fn local_addresses() -> Vec<IpAddr> {
     let Ok(interfaces) = if_addrs::get_if_addrs() else { return Vec::new() };
     interfaces
         .into_iter()
         .filter(|i| !i.is_loopback())
         .map(|i| i.ip())
-        .filter(|ip| ip.is_ipv4())
+        .filter(|ip| match ip {
+            IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+            // IPv6 is not advertised: the pinned-certificate model needs no name resolution, and
+            // one address family is one fewer thing to get wrong.
+            IpAddr::V6(_) => false,
+        })
         .collect()
 }
 
@@ -233,11 +275,36 @@ mod tests {
     }
 
     #[test]
-    fn local_addresses_excludes_loopback() {
-        // Whatever the machine has, 127.0.0.1 must never be advertised — no peer could reach it.
+    fn this_device_advertises_a_platform_the_other_side_can_draw() {
+        // Only two values are ever drawn. A third would silently fall through to the desktop glyph
+        // on the receiving side, so the sender must never invent one.
+        assert!(
+            THIS_PLATFORM == "desktop" || THIS_PLATFORM == "mobile",
+            "unexpected platform {THIS_PLATFORM}"
+        );
+        // The build target is what decides it, and the phone is the case that matters — a desktop
+        // drawn as a phone is merely wrong, but every paired device being a laptop makes the icon
+        // useless.
+        #[cfg(target_os = "android")]
+        assert_eq!(THIS_PLATFORM, "mobile");
+        #[cfg(target_os = "windows")]
+        assert_eq!(THIS_PLATFORM, "desktop");
+    }
+
+    #[test]
+    fn only_addresses_reachable_on_this_link_are_advertised() {
+        // Whatever the machine has: no loopback, no IPv6, and nothing routable off the local link.
+        // A phone with mobile data advertised its cellular address before this — unreachable from
+        // the Wi-Fi it was announcing on, and a needless broadcast of the device's public IP.
         for ip in local_addresses() {
             assert!(!ip.is_loopback(), "advertised a loopback address: {ip}");
-            assert!(ip.is_ipv4());
+            match ip {
+                IpAddr::V4(v4) => assert!(
+                    v4.is_private() || v4.is_link_local(),
+                    "advertised an address no peer on this link can reach: {v4}"
+                ),
+                IpAddr::V6(_) => panic!("IPv6 must not be advertised"),
+            }
         }
     }
 }

@@ -36,6 +36,11 @@ pub struct Peer {
     /// Where we last reached it, so a reconnect doesn't have to wait for mDNS.
     #[serde(default)]
     pub last_addr: Option<String>,
+    /// `"desktop"` or `"mobile"`, learned at pairing. Stored rather than read from the live
+    /// advertisement so an OFFLINE device still draws as the thing it is — a card that changed its
+    /// icon on reconnect would read as a different device.
+    #[serde(default)]
+    pub platform: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -368,6 +373,7 @@ mod tests {
                 cert_sha256: sha256_hex(&other_cert),
                 added_at: now_millis(),
                 last_addr: None,
+                platform: None,
             })
             .expect("pin");
 

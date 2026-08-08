@@ -46,6 +46,9 @@ export const IconChevronRight = (p: P) => svg(<path d="m9 6 6 6-6 6" />, p.class
 export const IconClose = (p: P) => svg(<path d="M6 6l12 12M18 6 6 18" />, p.className);
 export const IconZen = (p: P) =>
   svg(<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3" />, p.className);
+// The same corners folded inward: leaving fullscreen rather than entering it.
+export const IconZenExit = (p: P) =>
+  svg(<path d="M9 3v3a2 2 0 0 1-2 2H4m11-5v3a2 2 0 0 0 2 2h3M9 21v-3a2 2 0 0 0-2-2H4m11 5v-3a2 2 0 0 1 2-2h3" />, p.className);
 export const IconCursor = (p: P) =>
   svg(<path d="m4 3 7 17 2.5-6.5L20 11z" />, p.className);
 // Highlighter: a chisel-tip marker drawing a highlighted swipe.
@@ -113,3 +116,51 @@ export const IconPages = (p: P) =>
   svg(<><path d="M9 3h7l4 4v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M15 3v5h5" /><path d="M4 8v11a3 3 0 0 0 3 3h9" /></>, p.className);
 export const IconEraser = (p: P) =>
   svg(<><path d="M7 21 3.5 17.5a2 2 0 0 1 0-2.8l8.7-8.7a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8L13 19" /><path d="M7 21h12" /><path d="m9 12 4 4" /></>, p.className);
+
+// Overflow: the actions that don't fit on a phone's toolbar.
+export const IconMore = (p: P) =>
+  svg(
+    <>
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </>,
+    p.className,
+  );
+
+/* Nearby devices. A paired device is drawn as the machine it actually is, which is the fastest way
+   to tell two cards apart before reading either name. */
+export const IconLaptop = (p: P) =>
+  svg(<><rect x="4" y="5" width="16" height="11" rx="1.5" /><path d="M2 19h20" /></>, p.className);
+export const IconPhone = (p: P) =>
+  svg(<><rect x="7" y="2.5" width="10" height="19" rx="2" /><path d="M11 18.5h2" /></>, p.className);
+export const IconFolder = (p: P) =>
+  svg(<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4L11 7.5h8.5A1.5 1.5 0 0 1 21 9v8.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" />, p.className);
+export const IconFile = (p: P) =>
+  svg(<><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></>, p.className);
+// Star: kept on this device. The filled variant is the one place we break the stroke-only rule —
+// a hollow-vs-accent outline is far too subtle to read as on-vs-off at 16px.
+export const IconStar = (p: P) =>
+  svg(<path d="m12 3.5 2.6 5.3 5.9.9-4.25 4.15 1 5.85L12 16.95 6.75 19.7l1-5.85L3.5 9.7l5.9-.9z" />, p.className);
+export const IconStarFilled = (p: P) => (
+  <svg
+    className={`${base} ${p.className ?? ""}`}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    stroke="currentColor"
+    strokeWidth={1.8}
+    strokeLinejoin="round"
+  >
+    <path d="m12 3.5 2.6 5.3 5.9.9-4.25 4.15 1 5.85L12 16.95 6.75 19.7l1-5.85L3.5 9.7l5.9-.9z" />
+  </svg>
+);
+// Sync: two arrows chasing each other. Deliberately NOT a download arrow — what this moves is
+// highlights and reading positions in both directions, never files.
+export const IconSync = (p: P) =>
+  svg(<><path d="M20 11a8 8 0 0 0-13.7-5.3L3 9" /><path d="M3 4.5V9h4.5" /><path d="M4 13a8 8 0 0 0 13.7 5.3L21 15" /><path d="M21 19.5V15h-4.5" /></>, p.className);
+export const IconSend = (p: P) =>
+  svg(<><path d="M21 3 10.5 13.5" /><path d="M21 3l-6.75 18-3.75-7.5L3 9.75z" /></>, p.className);
+export const IconCheck = (p: P) => svg(<path d="m4.5 12.5 5 5 10-11" />, p.className);
+export const IconPlus = (p: P) => svg(<path d="M12 5v14M5 12h14" />, p.className);
+export const IconWifiOff = (p: P) =>
+  svg(<><path d="M2 4l20 16" /><path d="M8.5 16.5a5 5 0 0 1 6 0" /><path d="M5 13a10 10 0 0 1 3-2" /><path d="M18.5 13a10 10 0 0 0-2.3-1.6" /><path d="M1.8 9.3a15 15 0 0 1 4.4-2.7" /><path d="M22.2 9.3a15 15 0 0 0-11-3.2" /><path d="M12 20h.01" /></>, p.className);

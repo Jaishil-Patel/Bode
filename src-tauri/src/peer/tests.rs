@@ -76,6 +76,7 @@ async fn harness(fixture: &Fixture, pair: bool) -> Harness {
                 cert_sha256: client_fingerprint,
                 added_at: now_millis(),
                 last_addr: None,
+                platform: Some("mobile".into()),
             })
             .expect("pin client");
         client_identity
@@ -85,6 +86,7 @@ async fn harness(fixture: &Fixture, pair: bool) -> Harness {
                 cert_sha256: server_fingerprint,
                 added_at: now_millis(),
                 last_addr: None,
+                platform: Some("desktop".into()),
             })
             .expect("pin server");
     }
@@ -211,6 +213,57 @@ async fn unpairing_takes_effect_on_the_very_next_connection() {
 }
 
 #[tokio::test]
+async fn a_device_can_ask_to_be_forgotten_but_cannot_forget_anyone_else() {
+    // Forgetting is only half done when one side does it: the other keeps listing the device and
+    // every action fails at the handshake, which reads as a broken network rather than a deliberate
+    // act. `/v1/unpair` is what makes the two views agree.
+    let fixture = Fixture::new("mutual-unpair");
+    let h = harness(&fixture, true).await;
+    assert!(h.client.info(h.addr).await.is_ok(), "should start out trusted");
+
+    // A third device the server also trusts. The security property is that the caller cannot touch
+    // it — the request names nobody, so there is no field in which to try.
+    let bystander = Identity::load_or_create(&fixture.dir.join("bystander-id"), "Laptop")
+        .expect("bystander identity");
+    {
+        let mut identity = h.server_identity.lock().expect("lock");
+        identity
+            .add_peer(Peer {
+                device_id: bystander.device_id.clone(),
+                name: "Laptop".into(),
+                cert_sha256: bystander.cert_sha256.clone(),
+                added_at: now_millis(),
+                last_addr: None,
+                platform: Some("desktop".into()),
+            })
+            .expect("pin bystander");
+        h.server_trust.sync_from(&identity);
+    }
+
+    h.client.unpair(h.addr).await.expect("the peer should accept being forgotten");
+
+    {
+        let identity = h.server_identity.lock().expect("lock");
+        assert!(
+            !identity.peers().iter().any(|p| p.device_id == h.client_device_id),
+            "the caller must have been removed"
+        );
+        assert!(
+            identity.peers().iter().any(|p| p.device_id == bystander.device_id),
+            "no one else may be removed — the caller is identified by its certificate, not by \
+             anything it can put in a request"
+        );
+    }
+
+    // And the removal must bite on the handshake straight away, not at the next restart — the pin
+    // lives in the trust store as well as on disk.
+    assert!(
+        h.client.info(h.addr).await.is_err(),
+        "a device that asked to be forgotten must no longer be admitted"
+    );
+}
+
+#[tokio::test]
 async fn two_unpaired_devices_can_actually_pair() {
     // The gap that let a fatal bug ship: every other test here pre-pins both sides, so none of them
     // exercised the one exchange where NEITHER device knows the other's certificate yet. The joining
@@ -272,11 +325,26 @@ async fn two_unpaired_devices_can_actually_pair() {
     // And the host must now have pinned the joiner, so an ordinary connection works next time.
     {
         let identity = h.server_identity.lock().expect("lock");
-        assert!(
-            identity.peers().iter().any(|p| p.device_id == joiner_identity.device_id),
-            "the host should have pinned the joiner"
+        let pinned = identity
+            .peers()
+            .iter()
+            .find(|p| p.device_id == joiner_identity.device_id)
+            .expect("the host should have pinned the joiner");
+
+        // Both sides learn what kind of machine the other is DURING pairing, and store it. Reading
+        // it live from the mDNS advertisement instead would leave an offline device with no icon —
+        // and a card that changed its icon on reconnect reads as a different device.
+        assert_eq!(
+            pinned.platform.as_deref(),
+            Some(super::discovery::THIS_PLATFORM),
+            "the host must record what the joiner said it was"
         );
     }
+    assert_eq!(
+        response.platform.as_deref(),
+        Some(super::discovery::THIS_PLATFORM),
+        "and the joiner must learn the same about the host"
+    );
 
     // The HOST must be able to show the same fingerprint. `/v1/pair` runs on a connection task with
     // no route to the UI, so without this recorded the host would display the numeric code while
@@ -424,6 +492,43 @@ async fn reading_state_round_trips_between_devices() {
         .await
         .expect("get missing");
     assert!(missing.documents.is_empty());
+}
+
+#[tokio::test]
+async fn a_device_sharing_nothing_still_answers_and_syncs() {
+    // A phone never shares a folder, so it must still be reachable for its notes to be syncable.
+    // Conflating "reachable" with "sharing" meant the desktop saw the phone as permanently offline
+    // and greyed out sync — a whole direction of the feature that could never run.
+    let fixture = Fixture::new("no-share");
+    let h = harness(&fixture, true).await;
+    let (client, addr) = (&h.client, h.addr);
+
+    h.server_state.set_share_root(None);
+
+    // Reachable: it answers, and honestly reports that it is not sharing.
+    let info = client.info(addr).await.expect("a paired device must still answer");
+    assert!(!info.sharing);
+    assert!(info.root_name.is_none());
+
+    // Reading state still flows in both directions.
+    use super::client::StateBundle;
+    let key = "dev1/thesis.pdf".to_string();
+    h.server_state
+        .published
+        .lock()
+        .expect("lock")
+        .insert(key.clone(), serde_json::json!({ "page": 12 }));
+
+    let got = client.get_state(addr, &[key.clone()]).await.expect("get state");
+    assert_eq!(got.documents[&key]["page"], 12);
+
+    let mut mine = std::collections::HashMap::new();
+    mine.insert(key.clone(), serde_json::json!({ "page": 30 }));
+    client.put_state(addr, &StateBundle { documents: mine }).await.expect("put state");
+
+    // But nothing about files is exposed by being reachable.
+    assert!(client.list(addr, "").await.is_err(), "listing must refuse with no share root");
+    assert!(client.fetch(addr, "thesis.pdf", 0).await.is_err(), "fetching must refuse too");
 }
 
 #[tokio::test]

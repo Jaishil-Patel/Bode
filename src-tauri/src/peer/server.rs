@@ -99,7 +99,7 @@ impl ShareState {
         }
     }
 
-    fn share_root(&self) -> Option<PathBuf> {
+    pub fn share_root(&self) -> Option<PathBuf> {
         self.root.lock().ok().and_then(|r| r.clone())
     }
 
@@ -152,6 +152,9 @@ struct InfoResponse {
     now: u64,
     root_name: Option<String>,
     sharing: bool,
+    /// `"desktop"` or `"mobile"`. Sent here as well as in the mDNS record so a device paired by
+    /// typed address — never discovered — still gets the right icon.
+    platform: String,
 }
 
 #[derive(Serialize)]
@@ -213,6 +216,9 @@ struct PairRequest {
     device_id: String,
     name: String,
     code: String,
+    /// Cosmetic, and absent from older peers — never a reason to refuse a pairing.
+    #[serde(default)]
+    platform: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -221,6 +227,7 @@ struct PairResponse {
     name: String,
     /// Both devices display this; the user confirming it matches is what defeats a man in the middle.
     fingerprint: String,
+    platform: String,
 }
 
 #[derive(Serialize)]
@@ -249,7 +256,40 @@ pub fn router(state: Arc<ShareState>) -> Router {
         .route("/v1/push", post(handle_push))
         .route("/v1/state", get(handle_get_state).post(handle_put_state))
         .route("/v1/pair", post(handle_pair))
+        .route("/v1/unpair", post(handle_unpair))
         .with_state(state)
+}
+
+/// Drop the caller's pin, because it has just dropped ours.
+///
+/// Unpairing is only half done when one side forgets: the other goes on listing the device, and
+/// every action against it fails at the TLS handshake with an error about certificates, which is
+/// indistinguishable from a network fault. Telling the peer is what makes the two views agree.
+///
+/// The request carries NO identity — deliberately. Who is asking is read from the client certificate
+/// the TLS layer already verified against the pin set, so a caller can only ever remove itself, and
+/// there is no field in which to name someone else. An unpinned device cannot reach this handler at
+/// all; the handshake refuses it first.
+async fn handle_unpair(State(state): State<Arc<ShareState>>, request: Request<Body>) -> Response<Body> {
+    let Some(peer_cert) = request.extensions().get::<PeerCert>().map(|c| c.0.clone()) else {
+        return fail(StatusCode::FORBIDDEN, "forbidden", "No client certificate");
+    };
+
+    let Ok(mut identity) = state.identity.lock() else {
+        return fail(StatusCode::INTERNAL_SERVER_ERROR, "internal", "identity unavailable");
+    };
+    let Some(device_id) = identity.peer_for_cert(&peer_cert).map(|p| p.device_id.clone()) else {
+        // Already gone. Both sides agree, which is the point, so this is a success.
+        return Json(serde_json::json!({ "ok": true })).into_response_or_error();
+    };
+    if let Err(message) = identity.remove_peer(&device_id) {
+        return fail(StatusCode::INTERNAL_SERVER_ERROR, "internal", &message);
+    }
+    // Without this the pin lives on in the handshake verifier until the next restart, so a device
+    // that has been forgotten could still connect.
+    state.trust.sync_from(&identity);
+    super::trace!("peer {device_id} asked to be forgotten");
+    Json(serde_json::json!({ "ok": true })).into_response_or_error()
 }
 
 async fn handle_info(State(state): State<Arc<ShareState>>) -> Response<Body> {
@@ -267,6 +307,7 @@ async fn handle_info(State(state): State<Arc<ShareState>>) -> Response<Body> {
             .as_ref()
             .and_then(|r| r.file_name().and_then(|n| n.to_str()).map(str::to_owned)),
         sharing: root.is_some(),
+        platform: super::discovery::THIS_PLATFORM.to_string(),
     };
     Json(info).into_response_or_error()
 }
@@ -703,6 +744,7 @@ async fn handle_pair(
             cert_sha256: their_fingerprint,
             added_at: now_millis(),
             last_addr: None,
+            platform: payload.platform,
         }) {
             return fail(StatusCode::INTERNAL_SERVER_ERROR, "internal", &message);
         }
@@ -712,6 +754,7 @@ async fn handle_pair(
             device_id: identity.device_id.clone(),
             name: identity.name.clone(),
             fingerprint,
+            platform: super::discovery::THIS_PLATFORM.to_string(),
         }
     };
 

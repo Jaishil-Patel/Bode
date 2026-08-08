@@ -4,8 +4,12 @@ import { setWindowFullscreen } from "../platform/window";
 /**
  * Fullscreen mode — what F11 does in a browser: the OS window fills the screen and Bode's chrome
  * (toolbar, tab bar, sidebar) gets out of the way, leaving only the document. Applies to every
- * document type; a PDF gets the presentation mode its viewer peers have, and every toolbar control
- * it hides has a keyboard equivalent (zoom, paging, find, sidebar, palette).
+ * document type; a PDF gets the presentation mode its viewer peers have.
+ *
+ * On the desktop every toolbar control this hides has a keyboard equivalent (zoom, paging, find,
+ * sidebar, palette), which is what makes hiding them safe. On a phone none of that is true — there
+ * is no F11 and no Escape — so `App` renders a visible exit button there instead. Without it,
+ * entering fullscreen on a phone is a one-way door.
  *
  * Deliberately kept out of the persisted settings store: this is transient view state, so quitting
  * while fullscreen can never bring the app back up with no way to reach the toolbar.

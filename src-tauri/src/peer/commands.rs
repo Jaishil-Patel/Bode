@@ -87,6 +87,13 @@ pub struct PeerView {
     added_at: u64,
     /// Whether this peer is currently visible on the network.
     online: bool,
+    /// Whether it is offering a folder. Reachable and sharing are different states: a phone is
+    /// always the former and never the latter, and offering to browse it only produces a failure.
+    sharing: bool,
+    /// `"desktop"` or `"mobile"`, for the icon. Taken from the live advertisement when the device is
+    /// on the network and from what was stored at pairing when it is not, so the card looks the same
+    /// either way.
+    platform: String,
 }
 
 #[derive(Serialize)]
@@ -235,6 +242,11 @@ fn pairing_code() -> Result<String, String> {
 #[tauri::command]
 pub async fn nearby_status(app: AppHandle, nearby: State<'_, Nearby>) -> Result<Status, String> {
     init(&app, &nearby)?;
+    // Being reachable and sharing a folder are different things. A phone never shares, so without
+    // this it never advertised, and the desktop — which decides "online" from what mDNS sees —
+    // showed it permanently offline and refused to sync with it.
+    ensure_reachable(&nearby).await;
+
     let guard = nearby.0.lock().map_err(|_| "Nearby state unavailable")?;
     let inner = guard.as_ref().ok_or("Nearby not initialised")?;
 
@@ -244,11 +256,21 @@ pub async fn nearby_status(app: AppHandle, nearby: State<'_, Nearby>) -> Result<
     let peers = identity
         .peers()
         .iter()
-        .map(|p| PeerView {
-            online: discovered.iter().any(|d| d.device_id == p.device_id),
-            device_id: p.device_id.clone(),
-            name: p.name.clone(),
-            added_at: p.added_at,
+        .map(|p| {
+            let seen = discovered.iter().find(|d| d.device_id == p.device_id);
+            PeerView {
+                online: seen.is_some(),
+                sharing: seen.map(|d| d.sharing).unwrap_or(false),
+                // Stored first: a device that goes offline must not change its icon.
+                platform: p
+                    .platform
+                    .clone()
+                    .or_else(|| seen.map(|d| d.platform.clone()))
+                    .unwrap_or_else(|| "desktop".to_string()),
+                device_id: p.device_id.clone(),
+                name: p.name.clone(),
+                added_at: p.added_at,
+            }
         })
         .collect();
 
@@ -268,7 +290,9 @@ pub async fn nearby_status(app: AppHandle, nearby: State<'_, Nearby>) -> Result<
     Ok(Status {
         device_id: identity.device_id.clone(),
         name: identity.name.clone(),
-        sharing: inner.port.is_some(),
+        // A folder is being shared, which is not the same as having a port open — a paired device
+        // binds one just to stay reachable for syncing.
+        sharing: share_root.is_some(),
         port: inner.port,
         share_root,
         inbox,
@@ -276,6 +300,84 @@ pub async fn nearby_status(app: AppHandle, nearby: State<'_, Nearby>) -> Result<
         peers,
         discovered,
     })
+}
+
+/// Make this device visible and answerable to the peers it has already paired with, without sharing
+/// any folder.
+///
+/// Only ever binds when there is at least one paired peer. That is the condition that matters: such
+/// a device has already been through pairing, which means it has already bound a port and already
+/// answered any firewall prompt, so this introduces no surprise. A device that has never paired
+/// stays completely inert.
+///
+/// Nothing is exposed by being reachable. `/v1/files` and `/v1/file` refuse without a share root,
+/// `/v1/push` refuses without an inbox, and every connection is still pinned mutual TLS — so the
+/// only thing this enables is what a paired device should have been able to do all along: exchange
+/// reading state in either direction.
+async fn ensure_reachable(nearby: &State<'_, Nearby>) {
+    {
+        let Ok(guard) = nearby.0.lock() else { return };
+        let Some(inner) = guard.as_ref() else { return };
+        if inner.port.is_some() {
+            return; // already listening, whether sharing or not
+        }
+        let Ok(identity) = inner.identity.lock() else { return };
+        if identity.peers().is_empty() {
+            return; // nobody to be reachable by
+        }
+    }
+    let _ = ensure_listening(nearby).await;
+}
+
+/// Bind a port and advertise, unless this device is already listening. Returns the port either way.
+///
+/// Separate from `ensure_reachable` because the two have different preconditions: that one is a
+/// background courtesy and refuses to bind for a device that has never paired, while pairing itself
+/// must be able to bind precisely when there are no peers yet. Binding here is no more surprising
+/// than binding to share a folder — both happen on an explicit press, with the app in front of the
+/// user, so a firewall prompt has an obvious cause.
+async fn ensure_listening(nearby: &State<'_, Nearby>) -> Result<u16, String> {
+    // Decide under the lock, then release it before doing any async work.
+    let plan = {
+        let guard = nearby.0.lock().map_err(|_| "Nearby state unavailable")?;
+        let inner = guard.as_ref().ok_or("Nearby not initialised")?;
+        if let Some(port) = inner.port {
+            return Ok(port);
+        }
+        let identity = inner.identity.lock().map_err(|_| "Identity unavailable")?;
+        let tls = server_config(&identity, Arc::clone(&inner.trust))?;
+        (
+            Arc::clone(&inner.share),
+            tls,
+            identity.device_id.clone(),
+            identity.name.clone(),
+            identity.cert_sha256.clone(),
+            Arc::clone(&inner.discovery),
+            inner.share.share_root().is_some(),
+        )
+    };
+    let (share, tls, device_id, name, cert_sha256, discovery, sharing) = plan;
+
+    let listener = bind(0).await?;
+    let local = listener.local_addr().map_err(|e| format!("Cannot read the port: {e}"))?;
+    let port = local.port();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+    tauri::async_runtime::spawn(async move {
+        let _ = run_accept_loop(listener, share, tls, shutdown_rx).await;
+    });
+
+    let cert_prefix = cert_sha256.get(..16).unwrap_or(&cert_sha256).to_string();
+    discovery.advertise(&device_id, &name, port, &cert_prefix, sharing)?;
+    super::trace!("listening on port {port} (sharing a folder: {sharing})");
+
+    if let Ok(mut guard) = nearby.0.lock() {
+        if let Some(inner) = guard.as_mut() {
+            inner.port = Some(port);
+            inner.shutdown = Some(shutdown_tx);
+        }
+    }
+    Ok(port)
 }
 
 /// Start sharing a folder. Binding happens here, on an explicit user action, so the Windows Firewall
@@ -327,7 +429,7 @@ pub async fn nearby_start_sharing(
 
     let (device_id, name, cert_sha256) = identity_bits;
     let cert_prefix = cert_sha256.get(..16).unwrap_or(&cert_sha256).to_string();
-    discovery.advertise(&device_id, &name, port, &cert_prefix)?;
+    discovery.advertise(&device_id, &name, port, &cert_prefix, true)?;
 
     let mut guard = nearby.0.lock().map_err(|_| "Nearby state unavailable")?;
     if let Some(inner) = guard.as_mut() {
@@ -343,35 +445,44 @@ pub async fn nearby_start_sharing(
 
 #[tauri::command]
 pub async fn nearby_stop_sharing(nearby: State<'_, Nearby>) -> Result<(), String> {
-    let mut guard = nearby.0.lock().map_err(|_| "Nearby state unavailable")?;
-    if let Some(inner) = guard.as_mut() {
-        if let Some(shutdown) = inner.shutdown.take() {
-            let _ = shutdown.send(());
-        }
+    let guard = nearby.0.lock().map_err(|_| "Nearby state unavailable")?;
+    if let Some(inner) = guard.as_ref() {
         // Turning sharing off is a decision, not a crash, so forget the folder — otherwise the next
         // launch would quietly start sharing again something the user chose to stop sharing.
         if let Ok(mut identity) = inner.identity.lock() {
             let _ = identity.set_share_root(None);
         }
-        inner.discovery.stop_advertising();
         inner.share.set_share_root(None);
         // Stop accepting pushes too: sharing off should mean nothing can write here either.
         inner.share.set_inbox(None);
         inner.share.close_pairing();
-        inner.port = None;
+        // The listener and the advertisement stay up. "Stop sharing" is about the folder — the
+        // device is still paired, and tearing down its reachability would silently break syncing
+        // notes as well, which the user did not ask to stop. Every file route refuses without a
+        // share root, so nothing is exposed by staying answerable.
     }
     Ok(())
 }
 
-/// Open a pairing window on the sharing device and return the code to display.
+/// Open a pairing window on this device and return the code to display.
+///
+/// Any device may host, including a phone. It used to require a folder already being shared, which
+/// made the desktop's half of pairing a dead end: the desktop asks for "the six digits shown on that
+/// device" and a phone had no way to produce any, because sharing is desktop-only. The two roles are
+/// unrelated — hosting a pairing means holding a socket open for three minutes with the app in the
+/// foreground, which is exactly the thing Android is fine with.
 #[tauri::command]
-pub async fn nearby_begin_pairing(nearby: State<'_, Nearby>) -> Result<String, String> {
+pub async fn nearby_begin_pairing(
+    app: AppHandle,
+    nearby: State<'_, Nearby>,
+) -> Result<String, String> {
+    init(&app, &nearby)?;
+    // Before the code is generated, so a failure to bind does not leave a window half-open.
+    ensure_listening(&nearby).await?;
+
     let code = pairing_code()?;
     let guard = nearby.0.lock().map_err(|_| "Nearby state unavailable")?;
-    let inner = guard.as_ref().ok_or("Turn on sharing first")?;
-    if inner.port.is_none() {
-        return Err("Turn on sharing before adding a device".to_string());
-    }
+    let inner = guard.as_ref().ok_or("Nearby not initialised")?;
     inner.share.open_pairing(code.clone())?;
     Ok(code)
 }
@@ -451,6 +562,7 @@ pub async fn nearby_pair(
         // The address that actually answered, not the whole advertised list — this is the fallback
         // used when mDNS goes quiet, so it should be one known to have worked.
         last_addr: Some(target.to_string()),
+        platform: response.platform.clone(),
     })?;
     inner.trust.sync_from(&identity);
 
@@ -461,8 +573,39 @@ pub async fn nearby_pair(
     })
 }
 
+/// Forget a device, on both sides where possible.
+///
+/// Returns whether the other device was told. A half-finished unpair is the nastiest state this
+/// feature has: the forgotten side goes on listing the device and every action against it fails at
+/// the TLS handshake, which reads as a network problem rather than as the deliberate act it was.
+///
+/// Best-effort by necessity — the peer may be off, asleep or on another network — so the local half
+/// happens regardless. "Forget this device" must always succeed on the device you are holding;
+/// nothing about the other one may block it.
 #[tauri::command]
-pub async fn nearby_unpair(nearby: State<'_, Nearby>, device_id: String) -> Result<(), String> {
+pub async fn nearby_unpair(
+    app: AppHandle,
+    nearby: State<'_, Nearby>,
+    device_id: String,
+) -> Result<bool, String> {
+    init(&app, &nearby)?;
+
+    // Strictly first. Once the local pin is gone this device no longer trusts the peer's
+    // certificate, so the connection needed to tell it anything can no longer be made.
+    let told = match resolve_peer(&nearby, &device_id).await {
+        Ok((client, addr)) => match client.unpair(addr).await {
+            Ok(()) => true,
+            Err(e) => {
+                super::trace!("could not tell {device_id} it was unpaired: {e}");
+                false
+            }
+        },
+        Err(e) => {
+            super::trace!("could not reach {device_id} to unpair: {e}");
+            false
+        }
+    };
+
     let guard = nearby.0.lock().map_err(|_| "Nearby state unavailable")?;
     let inner = guard.as_ref().ok_or("Nearby not initialised")?;
     let mut identity = inner.identity.lock().map_err(|_| "Identity unavailable")?;
@@ -472,7 +615,7 @@ pub async fn nearby_unpair(nearby: State<'_, Nearby>, device_id: String) -> Resu
     // Their documents go too, pinned ones included. Copies that outlive the trust that justified
     // holding them are exactly what "remove this device" is meant to prevent.
     inner.cache.forget_device(&device_id);
-    Ok(())
+    Ok(told)
 }
 
 #[tauri::command]
