@@ -213,6 +213,50 @@ async fn unpairing_takes_effect_on_the_very_next_connection() {
 }
 
 #[tokio::test]
+async fn an_open_pairing_window_exposes_nothing_but_the_pairing_route() {
+    // The window has to admit an unknown certificate at the TLS layer — learning the peer's
+    // certificate IS pairing — so for those three minutes the handshake stops being the thing that
+    // keeps strangers out. Every other route needs its own check, or opening "Add a device" hands
+    // the whole shared folder to anyone on the network for the length of the window.
+    let fixture = Fixture::new("pairing-window-exposure");
+    let h = harness(&fixture, false).await;
+
+    h.server_state.open_pairing("418902".to_string()).expect("open pairing");
+
+    let stranger = Identity::load_or_create(&fixture.dir.join("stranger-id"), "Attacker")
+        .expect("stranger identity");
+    let attacker = PeerClient::new(
+        super::tls::pairing_client_config(&stranger).expect("pairing config"),
+    );
+    use super::client::StateBundle;
+
+    // The handshake now succeeds — that is the point of the window — so each of these reaches HTTP
+    // and must be refused there instead.
+    assert!(attacker.list(h.addr, "").await.is_err(), "must not list the shared folder");
+    assert!(attacker.info(h.addr).await.is_err(), "must not report who this device is");
+    assert!(
+        attacker.get_state(h.addr, &[]).await.is_err(),
+        "must not read annotations or reading positions"
+    );
+    assert!(
+        attacker
+            .put_state(h.addr, &StateBundle { documents: Default::default() })
+            .await
+            .is_err(),
+        "must not inject annotations"
+    );
+    assert!(attacker.etag(h.addr, "notes.md").await.is_err(), "must not probe for documents");
+    assert!(attacker.unpair(h.addr).await.is_err(), "must not touch the pin set");
+
+    // And the one route that is meant to be reachable still is, or the guard has broken pairing.
+    let (response, _cert) = attacker
+        .pair(h.addr, &stranger.device_id, "Attacker", "418902")
+        .await
+        .expect("pairing itself must still work through the guard");
+    assert_eq!(response.device_id, h.server_device_id);
+}
+
+#[tokio::test]
 async fn a_device_can_ask_to_be_forgotten_but_cannot_forget_anyone_else() {
     // Forgetting is only half done when one side does it: the other keeps listing the device and
     // every action fails at the handshake, which reads as a broken network rather than a deliberate

@@ -247,7 +247,10 @@ fn fail(status: StatusCode, error: &'static str, message: &str) -> Response<Body
 }
 
 pub fn router(state: Arc<ShareState>) -> Router {
-    Router::new()
+    // Everything except pairing itself. Split into its own router so the pinned-peer check below is
+    // applied by CONSTRUCTION: a route added here later is guarded whether or not anyone remembers
+    // to guard it, which is the only arrangement that stays correct as the protocol grows.
+    let guarded = Router::new()
         .route("/v1/info", get(handle_info))
         .route("/v1/files", get(handle_files))
         // `get` also answers HEAD; `handle_file` checks the method and skips reading the bytes,
@@ -255,9 +258,45 @@ pub fn router(state: Arc<ShareState>) -> Router {
         .route("/v1/file", get(handle_file))
         .route("/v1/push", post(handle_push))
         .route("/v1/state", get(handle_get_state).post(handle_put_state))
-        .route("/v1/pair", post(handle_pair))
         .route("/v1/unpair", post(handle_unpair))
+        .layer(axum::middleware::from_fn_with_state(Arc::clone(&state), require_pinned_peer));
+
+    Router::new()
+        // The one route an unpinned certificate may reach, and only while a window is open —
+        // `handle_pair` checks that itself, and the TLS layer only admits an unknown certificate
+        // for as long as `TrustStore::is_pairing_open`.
+        .route("/v1/pair", post(handle_pair))
+        .merge(guarded)
         .with_state(state)
+}
+
+/// Refuse anything but `/v1/pair` from a device that is not pinned.
+///
+/// The TLS layer is not sufficient on its own. `TrustStore::accepts` returns true for ANY
+/// certificate while a pairing window is open — it has to, because learning the peer's certificate
+/// IS pairing — so for those three minutes the handshake stops filtering. Without this check every
+/// other route was reachable by any device on the network during that window: the shared folder
+/// could be listed and downloaded, the inbox written to, and reading state read or overwritten,
+/// with nothing more than a self-signed certificate and the right ALPN.
+///
+/// The identity comes from the certificate the TLS layer verified, never from the request, so there
+/// is nothing here a caller can assert about itself.
+async fn require_pinned_peer(
+    State(state): State<Arc<ShareState>>,
+    request: Request<Body>,
+    next: axum::middleware::Next,
+) -> Response<Body> {
+    let pinned = request
+        .extensions()
+        .get::<PeerCert>()
+        .map(|c| c.0.clone())
+        .and_then(|cert| state.identity.lock().ok().map(|id| id.peer_for_cert(&cert).is_some()))
+        .unwrap_or(false);
+
+    if !pinned {
+        return fail(StatusCode::FORBIDDEN, "forbidden", "This device is not paired with you");
+    }
+    next.run(request).await
 }
 
 /// Drop the caller's pin, because it has just dropped ours.
