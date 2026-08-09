@@ -217,6 +217,39 @@ body {
 }
 
 /*
+ * The annotation tools collapsing into their button, and growing back out.
+ *
+ * Duration is mirrored by COLLAPSE_MS in AnnotationBar.tsx, which keeps the outgoing element
+ * mounted for exactly this long. Behind the reduced-motion query like the rest of the app's motion:
+ * with it off both forms simply appear, because the JS only ever swaps opacity and scale, never
+ * position.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes tools-in {
+    from {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+  }
+  @keyframes tools-out {
+    to {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+  }
+  /* Entering plays on mount with no JS involvement, which is the point: driving it from a class
+     flipped a frame after mount raced, and a missed frame left the element invisible. */
+  .tools-in {
+    animation: tools-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  /* `forwards` holds the collapsed frame for the moment between the animation ending and React
+     unmounting the element. */
+  .tools-out {
+    animation: tools-out 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+/*
  * The tools-bar edge picker.
  *
  * Sized here rather than inline so the touch variant can exist: the cells are comfortable for a

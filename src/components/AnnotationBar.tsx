@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { create } from "zustand";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import { useAnnotations } from "../annotations/useAnnotations";
@@ -140,7 +141,223 @@ function edgeAt(x: number, y: number): Side {
   return (Object.keys(dist) as Side[]).reduce((a, b) => (dist[b] < dist[a] ? b : a));
 }
 
-export default function AnnotationBar() {
+/**
+ * How far the pointer must travel before a press counts as a drag rather than a tap.
+ *
+ * Only the minimised button needs this — it is the one control carrying two actions on one press
+ * (tap to reopen, drag to move). Small enough that a deliberate drag is never mistaken for a tap,
+ * large enough to absorb the couple of pixels a finger moves while lifting off a touchscreen.
+ */
+const DRAG_SLOP = 6;
+
+/**
+ * Where the minimised button is being dragged to, while a drag is in flight.
+ *
+ * This is a store rather than component state because the gesture outlives the component that
+ * starts it: pressing the grip minimises the bar, which unmounts AnnotationBar and mounts
+ * MinimizedToolsButton mid-drag. The window listeners survive that on their own (they are closures
+ * on `window`), but the position they produce has to reach whichever component is currently on
+ * screen. Transient by design — nothing here is persisted.
+ */
+const useToolsDrag = create<{
+  at: { x: number; y: number } | null;
+  update: (at: { x: number; y: number } | null) => void;
+}>((set) => ({
+  at: null,
+  update: (at) => set({ at }),
+}));
+
+/**
+ * Start dragging the tools button, from either the grip or the minimised button itself.
+ *
+ * `onTap` runs when the press ends without ever clearing DRAG_SLOP. The grip passes none: it has
+ * already minimised by the time this is called, so a press that goes nowhere is simply a minimise.
+ *
+ * `restoreOnDrop` is what separates the two gestures. A drag begun at the grip is "move the tools":
+ * the bar collapsed into the button under your finger, so on release it grows back out of it at the
+ * new edge, playing the collapse in reverse. A drag begun on an already-minimised button is "move
+ * the button", and leaves it minimised — otherwise nudging the icon out of your way would reopen
+ * the very thing you were trying to get out of the way.
+ */
+function startToolsDrag(
+  e: React.PointerEvent,
+  { onTap, restoreOnDrop = false }: { onTap?: () => void; restoreOnDrop?: boolean } = {},
+) {
+  e.preventDefault();
+  e.stopPropagation();
+  const sx = e.clientX;
+  const sy = e.clientY;
+  let moved = false;
+  const { update } = useToolsDrag.getState();
+
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", cancel);
+    update(null);
+  };
+  const move = (ev: PointerEvent) => {
+    if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < DRAG_SLOP) return;
+    moved = true;
+    update({ x: ev.clientX, y: ev.clientY });
+  };
+  const up = (ev: PointerEvent) => {
+    stop();
+    if (!moved) {
+      onTap?.();
+      return;
+    }
+    // One update, so the edge and the restore land in the same render — two calls would dock the
+    // button, paint, and only then start growing the bar.
+    useSettings.getState().updateLayout({
+      toolsSide: edgeAt(ev.clientX, ev.clientY),
+      ...(restoreOnDrop && { annotationsHidden: false }),
+    });
+  };
+  /*
+   * Android can take a gesture away mid-drag — a system edge swipe, an incoming call, or the
+   * WebView deciding it owns the pan. Without this the listeners leak and the button is stranded
+   * wherever the finger last was, with no pointerup ever arriving to put it down. The drag is
+   * abandoned rather than committed: a cancelled gesture is not a choice of edge.
+   */
+  const cancel = () => stop();
+
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", cancel);
+}
+
+/** Where the bar — or its minimised button — sits for a given edge, centred along that edge. */
+const toolsPos = (side: Side): React.CSSProperties =>
+  side === "bottom"
+    ? { bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)", left: "50%", transform: "translateX(-50%)" }
+    : side === "top"
+    ? { top: "calc(env(safe-area-inset-top) + 3.5rem)", left: "50%", transform: "translateX(-50%)" }
+    : side === "left"
+    ? { left: "0.75rem", top: "50%", transform: "translateY(-50%)" }
+    : { right: "0.75rem", top: "50%", transform: "translateY(-50%)" };
+
+const GLASS =
+  "rounded-full border border-white/15 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150";
+const GLASS_BG = "color-mix(in srgb, var(--surface) 42%, transparent)";
+
+/**
+ * How long the bar takes to collapse into its button, or grow back out of it.
+ *
+ * Kept in step with the transition on `.tools-collapse` in index.css. JS needs the number too: the
+ * outgoing element has to stay mounted for exactly as long as its exit animation runs.
+ */
+const COLLAPSE_MS = 200;
+
+/**
+ * Keep an element mounted for the length of its exit animation.
+ *
+ * Entering needs no bookkeeping at all: `.tools-in` is a keyframe animation, so it plays the moment
+ * the element appears. Driving the open state from JS instead meant flipping a class one frame
+ * after mount, which raced — the element could be left collapsed and invisible if that frame was
+ * missed. Nothing here depends on a frame firing.
+ */
+function useCollapse(show: boolean) {
+  const [lingering, setLingering] = useState(false);
+
+  useEffect(() => {
+    if (show) {
+      setLingering(true);
+      return;
+    }
+    const t = setTimeout(() => setLingering(false), COLLAPSE_MS);
+    return () => clearTimeout(t);
+  }, [show]);
+
+  return { mounted: show || lingering, open: show };
+}
+
+/**
+ * The animation classes for one of the two forms.
+ *
+ * These go on an *inner* element, never the positioned one. The fixed wrapper carries the
+ * `translateX(-50%)` that centres it on its edge, and folding a scale into that same transform
+ * makes the collapse impossible to express as a keyframe without one variant per side.
+ */
+const collapseCls = (open: boolean) => (open ? "tools-in" : "tools-out");
+
+/**
+ * The tools bar while minimised.
+ *
+ * Tap restores the bar; drag picks it up, carries it under the pointer and drops it against
+ * whichever edge is nearest on release. Repositioning used to be possible only from the grip on the
+ * expanded bar, which meant the minimised icon could be sitting in your way with no way to move it
+ * except reopening the whole bar first.
+ *
+ * Lives here rather than in App so the docking rules, the edge preview and `toolsPos` have one
+ * definition — App previously kept a second copy of the positioning, to be kept in step by hand.
+ */
+function MinimizedToolsButton({ open }: { open: boolean }) {
+  const updateLayout = useSettings((s) => s.updateLayout);
+  const side = useSettings((s) => s.layout.toolsSide);
+  const at = useToolsDrag((s) => s.at);
+
+  return (
+    <div
+      className="no-select fixed z-40"
+      style={{
+        // While dragging the button follows the pointer, so the docked `bottom`/`right` offsets
+        // must not be spread in alongside `left`/`top` — hence two whole branches, not a merge.
+        // The lift lives out here, on the untouched wrapper, rather than fighting the inner
+        // element's collapse animation for the same property.
+        ...(at
+          ? { left: at.x, top: at.y, transform: "translate(-50%, -50%) scale(1.08)" }
+          : toolsPos(side)),
+        pointerEvents: open ? undefined : "none",
+      }}
+    >
+      <button
+        title="Tap to show the tools · drag to move them to another edge"
+        // A tap is how you get the bar back. A drag only re-docks it and leaves it minimised —
+        // otherwise moving the icon out of the way would reopen the thing you just moved.
+        onPointerDown={(e) =>
+          startToolsDrag(e, { onTap: () => updateLayout({ annotationsHidden: false }) })
+        }
+        // The pointer path never fires a click, so the keyboard needs its own way in.
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            updateLayout({ annotationsHidden: false });
+          }
+        }}
+        className={`flex h-11 w-11 items-center justify-center text-text ${GLASS} ${collapseCls(
+          open,
+        )} ${at ? "cursor-grabbing" : "cursor-grab"}`}
+        // As on the grip: opt out of native panning so a touch drag survives past a few pixels.
+        style={{ background: GLASS_BG, touchAction: "none" }}
+      >
+        <IconPen />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The annotation tools, in whichever of their two forms is current.
+ *
+ * Owns the swap so the outgoing form can shrink away while the incoming one grows in, rather than
+ * one being replaced by the other between frames. Both are briefly on screen together, which is
+ * what makes the bar look like it collapses *into* its button.
+ */
+export default function AnnotationTools() {
+  const hidden = useSettings((s) => s.layout.annotationsHidden);
+  const bar = useCollapse(!hidden);
+  const mini = useCollapse(hidden);
+
+  return (
+    <>
+      {bar.mounted && <ToolsBar open={bar.open} />}
+      {mini.mounted && <MinimizedToolsButton open={mini.open} />}
+    </>
+  );
+}
+
+function ToolsBar({ open }: { open: boolean }) {
   const { filePath, currentPage } = useViewer();
   const updateLayout = useSettings((s) => s.updateLayout);
   const side = useSettings((s) => s.layout.toolsSide);
@@ -180,26 +397,18 @@ export default function AnnotationBar() {
   };
 
   // ---- Drag-to-dock: grab the grip and release over an edge to move the bar there. ----
-  const [dragTarget, setDragTarget] = useState<Side | null>(null);
-  const dragging = useRef(false);
+  /*
+   * Pressing the grip collapses the bar and hands the same, still-held gesture to the minimised
+   * button, so picking the bar up and putting it somewhere else is one motion rather than
+   * minimise, let go, then find and drag the icon.
+   *
+   * The minimise fires on pointerdown, which unmounts this component while the finger is still
+   * down — `startToolsDrag` is built for that: its listeners live on `window` and its position goes
+   * through a store, so the drag simply continues against whatever is on screen.
+   */
   const startDrag = (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragging.current = true;
-    setDragTarget(side);
-    const move = (ev: PointerEvent) => {
-      if (dragging.current) setDragTarget(edgeAt(ev.clientX, ev.clientY));
-    };
-    const up = (ev: PointerEvent) => {
-      dragging.current = false;
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      const target = edgeAt(ev.clientX, ev.clientY);
-      setDragTarget(null);
-      if (target !== side) updateLayout({ toolsSide: target });
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    updateLayout({ annotationsHidden: true });
+    startToolsDrag(e, { restoreOnDrop: true });
   };
 
   // Colour + thickness are only shown contextually: with the pencil, or with the shape tools /
@@ -329,19 +538,12 @@ export default function AnnotationBar() {
     </>
   );
 
-  // Position the floating bar against the chosen edge, centred along that edge.
-  const posStyle: React.CSSProperties =
-    side === "bottom"
-      ? { bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)", left: "50%", transform: "translateX(-50%)" }
-      : side === "top"
-      ? { top: "calc(env(safe-area-inset-top) + 3.5rem)", left: "50%", transform: "translateX(-50%)" }
-      : side === "left"
-      ? { left: "0.75rem", top: "50%", transform: "translateY(-50%)" }
-      : { right: "0.75rem", top: "50%", transform: "translateY(-50%)" };
-
-  const glass =
-    "rounded-full border border-white/15 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150";
-  const surfaceBg = { background: "color-mix(in srgb, var(--surface) 42%, transparent)" };
+  const posStyle = toolsPos(side);
+  const glass = GLASS;
+  const surfaceBg = { background: GLASS_BG };
+  // While collapsing, the bar is still on screen but must not intercept anything aimed at the page
+  // or at the button growing in behind it.
+  const pe = open ? "pointer-events-auto" : "pointer-events-none";
   const containerCls = vertical
     ? `no-select no-scrollbar flex max-h-[calc(100vh-2rem)] flex-col items-center gap-1 overflow-y-auto px-1.5 py-2.5 ${glass}`
     : `no-select no-scrollbar flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 ${glass}`;
@@ -353,7 +555,7 @@ export default function AnnotationBar() {
   const pillFirst = side === "bottom" || side === "right"; // order so the pill sits toward the page
   const optionsPill = showPill ? (
     <div
-      className={`no-select pointer-events-auto flex items-center gap-2 ${glass} ${
+      className={`no-select ${pe} flex items-center gap-2 ${glass} ${
         vertical ? "flex-col px-2 py-3" : "px-3 py-1.5"
       }`}
       style={surfaceBg}
@@ -375,14 +577,29 @@ export default function AnnotationBar() {
           (the gap and the space beside the centred pill) never blocks drawing on the page —
           only the bar and pill themselves capture pointer events. */}
       <div
-        className={`no-select pointer-events-none fixed z-40 flex items-center gap-2 ${vertical ? "flex-row" : "flex-col"}`}
+        className="no-select pointer-events-none fixed z-40"
         style={posStyle}
       >
+        {/* Inner element so the collapse animates scale without disturbing the wrapper's
+            positioning transform. */}
+        <div
+          className={`flex items-center gap-2 ${vertical ? "flex-row" : "flex-col"} ${collapseCls(open)}`}
+        >
         {pillFirst && optionsPill}
-        <div className={`${containerCls} pointer-events-auto`} style={surfaceBg}>
+        <div className={`${containerCls} ${pe}`} style={surfaceBg}>
         <button
-          title="Drag to move the tools bar to another edge"
+          title="Minimise · keep holding to drag the tools to another edge"
           onPointerDown={startDrag}
+          // Without this the WebView claims the gesture for panning after a few pixels and fires
+          // pointercancel, so a touch drag dies almost immediately. The bar itself scrolls
+          // horizontally on a phone, which is exactly the pan being opted out of here.
+          style={{ touchAction: "none" }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              updateLayout({ annotationsHidden: true });
+            }
+          }}
           className="flex h-9 w-7 shrink-0 cursor-grab items-center justify-center rounded-full text-muted hover:bg-white/10 active:cursor-grabbing"
         >
           <IconGrip />
@@ -493,25 +710,8 @@ export default function AnnotationBar() {
         </button>
         </div>
         {!pillFirst && optionsPill}
-      </div>
-
-      {/* Drag feedback: highlight the edge the bar will snap to on release. */}
-      {dragTarget && (
-        <div className="pointer-events-none fixed inset-0 z-[60]">
-          <div
-            className="absolute bg-accent/30 ring-2 ring-accent transition-all"
-            style={
-              dragTarget === "top"
-                ? { top: 0, left: 0, right: 0, height: 56 }
-                : dragTarget === "bottom"
-                ? { bottom: 0, left: 0, right: 0, height: 56 }
-                : dragTarget === "left"
-                ? { top: 0, bottom: 0, left: 0, width: 56 }
-                : { top: 0, bottom: 0, right: 0, width: 56 }
-            }
-          />
         </div>
-      )}
+      </div>
     </>
   );
 }
