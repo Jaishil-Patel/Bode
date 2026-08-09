@@ -65,6 +65,14 @@ body {
   forced-color-adjust: none;
   transform-origin: 0 0;
   z-index: 2;
+  /* Selection and search tints sit above the rendered glyphs on the canvas, so compositing them
+     normally washes the text out. Multiply keeps dark glyphs dark and only tints the paper.
+     This has to live on the layer, not on the spans: the z-index above makes .textLayer a stacking
+     context, which would clip a child's backdrop to this (empty) layer and turn the blend into a
+     no-op. Blending the whole layer instead resolves against the page div, whose backdrop is the
+     canvas. It is also the only way to reach ::selection, which cannot take mix-blend-mode itself.
+     Safe because every span is `color: transparent` below, and transparent multiplies to nothing. */
+  mix-blend-mode: multiply;
 }
 .textLayer span,
 .textLayer br {
@@ -74,16 +82,17 @@ body {
   cursor: text;
   transform-origin: 0% 0%;
 }
+/* Opaque pastels — the multiply above supplies the transparency these used to fake with alpha. */
 .textLayer span::selection {
-  background: rgba(99, 102, 241, 0.4);
+  background: #c7d2fe;
 }
 .textLayer .bode-highlight {
-  background: rgba(250, 204, 21, 0.45);
+  background: #ffe9a8;
   border-radius: 2px;
   color: transparent;
 }
 .textLayer .bode-highlight.current {
-  background: rgba(249, 115, 22, 0.65);
+  background: #ffb877;
 }
 
 /* ---- Modern range slider (annotation tool options) ---- */

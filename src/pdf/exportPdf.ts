@@ -1,6 +1,7 @@
 import {
   PDFDocument,
   StandardFonts,
+  BlendMode,
   rgb,
   degrees,
   setCharacterSqueeze,
@@ -11,7 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { readPdfBytes, writePdfBytes } from "../platform/files";
 import { baseNameOf, isRemote } from "../platform/docId";
-import type { Annotation } from "../annotations/useAnnotations";
+import { HIGHLIGHT_OPACITY, type Annotation } from "../annotations/useAnnotations";
 import { applyManifest, type PageRef } from "./pageOps";
 
 /*
@@ -120,9 +121,20 @@ async function drawAnnotation(
 ) {
   switch (a.type) {
     case "highlight": {
+      // Multiply, matching what AnnotationLayer paints on screen and what Acrobat writes for its
+      // own Highlight annotations. Without it the fill is composited normally and washes out the
+      // text it covers, however low the alpha goes.
       for (const q of a.rects) {
         const u = map.rect(q.x, q.y, q.w, q.h);
-        page.drawRectangle({ x: u.x, y: u.y, width: u.w, height: u.h, color: col(a.color), opacity: 0.35 });
+        page.drawRectangle({
+          x: u.x,
+          y: u.y,
+          width: u.w,
+          height: u.h,
+          color: col(a.color),
+          opacity: HIGHLIGHT_OPACITY,
+          blendMode: BlendMode.Multiply,
+        });
       }
       break;
     }

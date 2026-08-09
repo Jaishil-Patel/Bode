@@ -1,8 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   useAnnotations,
   newId,
+  HIGHLIGHT_OPACITY,
   type Annotation,
+  type HighlightAnno,
   type PenAnno,
   type RectAnno,
   type SignatureAnno,
@@ -14,6 +17,10 @@ import { isAndroid } from "../platform/files";
 import { useSettings } from "../settings/useSettings";
 
 const EMPTY: Annotation[] = [];
+
+// Highlight height as a fraction of the selection's line box. A hair under 1 so stacked lines get
+// a faint separation instead of fusing into one block, while still reading as the full selection.
+const HIGHLIGHT_LINE_SCALE = 0.94;
 
 // Reused canvas for measuring text width (so the edit box can be sized to match the original).
 let measureCtx: CanvasRenderingContext2D | null = null;
@@ -35,6 +42,16 @@ function pointSegDist(px: number, py: number, x1: number, y1: number, x2: number
 
 const inBox = (px: number, py: number, x: number, y: number, w: number, h: number, tol: number) =>
   px >= x - tol && px <= x + w + tol && py >= y - tol && py <= y + h + tol;
+
+// Screen-space rects for one highlight (one per selected line). Shared by the visual layer and the
+// invisible hit proxy so the thing you see and the thing you can grab can never drift apart.
+const highlightRects = (a: HighlightAnno, scale: number) =>
+  a.rects.map((r) => ({
+    x: r.x * scale,
+    y: r.y * scale,
+    width: r.w * scale,
+    height: r.h * scale,
+  }));
 
 // Whether the eraser at (px,py) should remove annotation `a`. `tol` is the hit slop in points.
 function eraserHits(a: Annotation, px: number, py: number, tol: number): boolean {
@@ -101,6 +118,9 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   const [drag, setDrag] = useState<Drag>(null);
   // Which text box is in edit mode (caret active). Double-click to enter; blur/deselect to exit.
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The page container (our own parent), used as the portal target for the highlight layer.
+  const [pageEl, setPageEl] = useState<HTMLElement | null>(null);
+  useEffect(() => setPageEl(ref.current?.parentElement ?? null), []);
 
   // Leave edit mode if the tool changes away from select or another annotation is selected.
   useEffect(() => {
@@ -227,15 +247,15 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
           if (cx < pageRect.left || cx > pageRect.right || cy < pageRect.top || cy > pageRect.bottom)
             continue;
           if (r.width < 1 || r.height < 1) continue;
-          // The selection rect spans the whole line box (with leading above/below the
-          // glyphs). Trim it so the highlight hugs the text — more off the top.
-          const topInset = r.height * 0.24;
-          const botInset = r.height * 0.06;
+          // Track the selection's line box so the mark lands where the blue preview showed it —
+          // hugging the glyphs instead left the committed highlight visibly smaller than what you
+          // had just dragged over. The slight inset is split evenly to keep it centred on the text.
+          const inset = (r.height * (1 - HIGHLIGHT_LINE_SCALE)) / 2;
           rects.push({
             x: (r.left - pageRect.left) / scale,
-            y: (r.top - pageRect.top + topInset) / scale,
+            y: (r.top - pageRect.top + inset) / scale,
             w: r.width / scale,
-            h: (r.height - topInset - botInset) / scale,
+            h: (r.height - inset * 2) / scale,
           });
         }
       }
@@ -483,6 +503,30 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     }
   };
 
+  /*
+   * The visible highlights, portalled out of this overlay and into the page container.
+   *
+   * They cannot be drawn in the overlay's own svg: the overlay sets `zIndex: 3`, and a positioned
+   * element with a non-auto z-index forms a stacking context, which clips a descendant's blend
+   * backdrop to that (empty) subtree. `mix-blend-mode: multiply` there is a silent no-op and the
+   * fill composites normally over the canvas, washing out the text beneath it — the whole reason
+   * this layer exists. Blending has to happen against the page canvas, so the svg is mounted as a
+   * sibling of it, under the page div (position: relative, z-index: auto — not a stacking context,
+   * so the canvas is genuinely in the backdrop). z-index 1 puts it above the canvas and below
+   * .textLayer, and creating a stacking context here is harmless: only ancestors clip the backdrop.
+   *
+   * It stays part of this component so drag previews, selection and colors keep flowing from local
+   * state — React events propagate through the React tree, not the DOM tree, so a portal changes
+   * nothing about behaviour.
+   */
+  const renderHighlight = (a: HighlightAnno, isDraft: boolean) => (
+    <g key={a.id + (isDraft ? "-draft" : "")}>
+      {highlightRects(a, scale).map((r, i) => (
+        <rect key={i} {...r} fill={a.color} fillOpacity={HIGHLIGHT_OPACITY} />
+      ))}
+    </g>
+  );
+
   // Apply an in-progress drag offset for live rendering.
   const withDrag = (a: Annotation): Annotation => {
     if (!drag || drag.id !== a.id) return a;
@@ -492,6 +536,29 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       return { ...a, rects: a.rects.map((r) => ({ ...r, x: r.x + drag.dx, y: r.y + drag.dy })) };
     return { ...a, x: a.x + drag.dx, y: a.y + drag.dy } as Annotation;
   };
+
+  const highlightLayer =
+    pageEl &&
+    createPortal(
+      <svg
+        width={width}
+        height={height}
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 1,
+          pointerEvents: "none",
+          mixBlendMode: "multiply",
+          overflow: "visible",
+        }}
+      >
+        {pageAnnos
+          .filter((a): a is HighlightAnno => a.type === "highlight")
+          .map((a) => renderHighlight(withDrag(a) as HighlightAnno, false))}
+        {draft?.type === "highlight" && renderHighlight(draft, true)}
+      </svg>,
+      pageEl,
+    );
 
   const annoPE = tool === "select" ? "auto" : "none"; // per-annotation pointer events
 
@@ -504,19 +571,19 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       onPointerDown: (e: React.PointerEvent) => !isDraft && startMove(e, a),
     };
     if (a.type === "highlight") {
-      // One group of line rectangles, multiplied to blend nicely over text.
+      // Invisible stand-in. The visible highlight is painted by `highlightLayer` below, which sits
+      // under .textLayer so it can blend against the page canvas — too low to ever be clicked,
+      // since the text layer's spans are hit-testable. This group keeps drag-to-move working.
+      // `pointerEvents: "all"` rather than "auto": the latter resolves to `visiblePainted`, which
+      // is not reliably hit-testable at zero fill-opacity.
       return (
-        <g key={key} {...common} style={{ ...common.style, mixBlendMode: "multiply" }}>
-          {a.rects.map((r, i) => (
-            <rect
-              key={i}
-              x={r.x * scale}
-              y={r.y * scale}
-              width={r.w * scale}
-              height={r.h * scale}
-              fill={a.color}
-              fillOpacity={0.35}
-            />
+        <g
+          key={key}
+          onPointerDown={common.onPointerDown}
+          style={{ pointerEvents: tool === "select" ? "all" : "none", cursor: "move" }}
+        >
+          {highlightRects(a, scale).map((r, i) => (
+            <rect key={i} {...r} fill={a.color} fillOpacity={0} />
           ))}
         </g>
       );
@@ -638,6 +705,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
+      {highlightLayer}
       <svg width={width} height={height} style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "visible" }}>
         {pageAnnos
           .filter((a) => a.type !== "text" && a.type !== "signature")

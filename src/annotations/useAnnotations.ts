@@ -199,7 +199,14 @@ type Persisted = Pick<
   | "signatureDataUrl"
 >;
 
-const DEFAULT_PRESETS = ["#fde047", "#86efac", "#93c5fd"]; // yellow, green, blue
+// Highlighter inks are deliberately high-luminance: they are composited with `multiply` (on screen
+// and on export), which darkens rather than covers. Multiply is what keeps the glyphs underneath
+// crisp — black text times any color is still black — but it also means a saturated mid-tone would
+// dim the whole page. Acrobat and pdf.js pick pastels for the same reason.
+const DEFAULT_PRESETS = ["#fff59d", "#a7f3d0", "#a8dfff"]; // yellow, green, blue
+
+// Full strength: with multiply doing the tinting, alpha would only mute the marker.
+export const HIGHLIGHT_OPACITY = 1;
 
 /**
  * Upgrade annotations saved by older versions to the current shape.
