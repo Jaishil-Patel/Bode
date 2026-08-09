@@ -40,6 +40,35 @@ export const IconDevices = (p: P) =>
     </>,
     p.className,
   );
+/* Settings categories. */
+export const IconPalette = (p: P) =>
+  svg(
+    <>
+      <path d="M12 3a9 9 0 1 0 0 18c1 0 1.6-.6 1.6-1.4 0-.4-.2-.7-.4-1-.3-.3-.4-.6-.4-1 0-.8.6-1.4 1.4-1.4H16a5 5 0 0 0 5-5c0-4.2-4-8.2-9-8.2Z" />
+      <circle cx="7.5" cy="12" r="1" />
+      <circle cx="11" cy="7.8" r="1" />
+      <circle cx="16" cy="9.8" r="1" />
+    </>,
+    p.className,
+  );
+// An open book: the reading-behaviour group (scrolling, page spacing).
+export const IconBook = (p: P) =>
+  svg(
+    <>
+      <path d="M12 6.5C10.5 5 8.5 4.5 4 4.5v13c4.5 0 6.5.5 8 2 1.5-1.5 3.5-2 8-2v-13c-4.5 0-6.5.5-8 2z" />
+      <path d="M12 6.5V19.5" />
+    </>,
+    p.className,
+  );
+export const IconKeyboard = (p: P) =>
+  svg(
+    <>
+      <rect x="2.5" y="6" width="19" height="12" rx="2" />
+      <path d="M6.5 9.8h.01M10 9.8h.01M13.5 9.8h.01M17 9.8h.01M6.5 13.6h.01M17 13.6h.01M9.6 13.6h4.8" />
+    </>,
+    p.className,
+  );
+
 export const IconChevronUp = (p: P) => svg(<path d="m6 15 6-6 6 6" />, p.className);
 export const IconChevronDown = (p: P) => svg(<path d="m6 9 6 6 6-6" />, p.className);
 export const IconChevronRight = (p: P) => svg(<path d="m9 6 6 6-6 6" />, p.className);

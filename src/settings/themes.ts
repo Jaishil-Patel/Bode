@@ -13,12 +13,14 @@ export interface CustomTheme {
   accentFg: string;
 }
 
-export const BUILT_IN_THEMES: { name: ThemeName; label: string; swatch: string }[] = [
-  { name: "light", label: "Light", swatch: "#ffffff" },
-  { name: "dark", label: "Dark", swatch: "#232428" },
-  { name: "sepia", label: "Sepia", swatch: "#efe6d4" },
-  { name: "oled", label: "OLED Black", swatch: "#000000" },
-  { name: "custom", label: "Custom", swatch: "#6366f1" },
+// No swatch colour here: the settings panel previews a theme by rendering a miniature with that
+// theme's own `data-theme` attribute, so themes.css stays the single source of truth for colour.
+export const BUILT_IN_THEMES: { name: ThemeName; label: string }[] = [
+  { name: "light", label: "Light" },
+  { name: "dark", label: "Dark" },
+  { name: "sepia", label: "Sepia" },
+  { name: "oled", label: "OLED" },
+  { name: "custom", label: "Custom" },
 ];
 
 export const DEFAULT_CUSTOM_THEME: CustomTheme = {
@@ -44,6 +46,20 @@ const VAR_MAP: Record<keyof CustomTheme, string> = {
   accentFg: "--accent-fg",
 };
 
+/**
+ * The custom theme as inline CSS variables.
+ *
+ * `applyTheme` writes these onto <html> when custom is the active theme; this returns the same set
+ * as a style object so the settings panel can preview custom while a different theme is live —
+ * themes.css deliberately defines no values for `[data-theme="custom"]`, so a preview with only the
+ * attribute set would inherit whatever theme is currently applied.
+ */
+export function customThemeVars(custom: CustomTheme): Record<string, string> {
+  return Object.fromEntries(
+    (Object.keys(VAR_MAP) as (keyof CustomTheme)[]).map((k) => [VAR_MAP[k], custom[k]]),
+  );
+}
+
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   let h = hex.trim().replace("#", "");
   if (h.length === 3) h = h.split("").map((c) => c + c).join("");
@@ -67,9 +83,38 @@ function updateNativeTitleBar(): void {
   });
 }
 
-/** Apply a theme to <html>: set the data-theme attribute and, for custom, inline vars. */
-export function applyTheme(theme: ThemeName, custom: CustomTheme): void {
+/** Kept in step with the transition duration in index.css (`html.theme-fade`). */
+const THEME_FADE_MS = 240;
+let fadeTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Arm the cross-fade for one theme change.
+ *
+ * The class has to come off again: left on, it would slow every hover and press in the app to a
+ * quarter second. Re-arming while a fade is already running restarts the timer rather than stacking
+ * a second one, so flicking through themes in the picker stays smooth instead of cutting each fade
+ * short at the previous switch's deadline.
+ */
+function beginThemeFade(root: HTMLElement): void {
+  root.classList.add("theme-fade");
+  if (fadeTimer !== null) clearTimeout(fadeTimer);
+  fadeTimer = setTimeout(() => {
+    fadeTimer = null;
+    root.classList.remove("theme-fade");
+  }, THEME_FADE_MS);
+}
+
+/**
+ * Apply a theme to <html>: set the data-theme attribute and, for custom, inline vars.
+ *
+ * `animate` cross-fades the colour change. It is opt-in because the two callers that must not fade
+ * outnumber the ones that should: hydration would fade the default theme into the saved one on every
+ * launch (reading as a flash of the wrong theme), and dragging a custom colour picker would smear
+ * every sample behind the cursor instead of tracking it.
+ */
+export function applyTheme(theme: ThemeName, custom: CustomTheme, animate = false): void {
   const root = document.documentElement;
+  if (animate) beginThemeFade(root);
   root.dataset.theme = theme;
 
   // Always clear any previously-inlined custom vars first.

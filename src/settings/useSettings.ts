@@ -221,7 +221,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setTheme: (t) => {
     set({ theme: t, settingsUpdatedAt: Date.now() });
     const s = get();
-    applyTheme(t, s.customTheme);
+    applyTheme(t, s.customTheme, true);
     persist(s);
   },
   setCustomThemeVar: (key, value) => {
@@ -271,7 +271,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const merged = mergeSettings(get(), remote);
     set(merged);
     const s = get();
-    applyTheme(s.theme, s.customTheme);
+    // Faded: a theme arriving from another device is a visible change the user did not make here,
+    // and a snap gives no clue that anything was received.
+    applyTheme(s.theme, s.customTheme, true);
     persist(s);
     void flushSettings();
   },

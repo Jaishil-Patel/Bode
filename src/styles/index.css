@@ -171,6 +171,89 @@ body {
     transition-duration: 50ms; /* snap down fast, spring back slow */
     transition-timing-function: ease-out;
   }
+  /* Opt out for large hit areas — a settings row or a theme card is the width of the panel, and
+     shrinking that by 12% reads as the panel glitching rather than a button depressing. The
+     `button` prefix is what out-specifies the rule above without needing !important. */
+  button.no-press:not(:disabled):active {
+    transform: none;
+    filter: none;
+  }
+}
+
+/*
+ * Theme cross-fade.
+ *
+ * Switching themes swaps the CSS variables and every colour in the app snaps at once. The variables
+ * themselves cannot be animated — an unregistered `--x` has no animatable type — but the properties
+ * that *consume* them can: when `--bg` changes, `background-color: var(--bg)` gets a new computed
+ * value and transitions like any other colour change.
+ *
+ * Scoped to a class that exists only for the length of the fade rather than living on `*`
+ * permanently, so it costs nothing while the app is idle and cannot interfere with the hover and
+ * press transitions the UI already defines. `!important` is what lets it win over those for the
+ * ~quarter second it is applied.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  html.theme-fade,
+  html.theme-fade *,
+  html.theme-fade *::before,
+  html.theme-fade *::after {
+    transition:
+      background-color 240ms ease,
+      color 240ms ease,
+      border-color 240ms ease,
+      outline-color 240ms ease,
+      fill 240ms ease,
+      stroke 240ms ease,
+      box-shadow 240ms ease !important;
+    transition-delay: 0s !important;
+  }
+  /* The text layer is hundreds of absolutely-positioned transparent spans per page. Transitioning
+     them changes nothing visible and only adds style recalculation to the moment of the switch. */
+  html.theme-fade .textLayer,
+  html.theme-fade .textLayer * {
+    transition: none !important;
+  }
+}
+
+/*
+ * The tools-bar edge picker.
+ *
+ * Sized here rather than inline so the touch variant can exist: the cells are comfortable for a
+ * cursor at this size but well under Android's 48dp guidance for a finger, and `pointer: coarse` is
+ * the honest test — it asks about the input device rather than guessing from screen width.
+ */
+.edge-picker {
+  display: grid;
+  width: 84px;
+  height: 58px;
+  grid-template-columns: 22px 1fr 22px;
+  grid-template-rows: 17px 1fr 17px;
+}
+@media (pointer: coarse) {
+  .edge-picker {
+    width: 116px;
+    height: 104px;
+    grid-template-columns: 34px 1fr 34px;
+    grid-template-rows: 34px 1fr 34px;
+  }
+}
+
+/*
+ * Tinted fills that follow the active theme.
+ *
+ * Tailwind's opacity modifier cannot produce these: the theme colours are whole `var(--x)` strings
+ * rather than colour channels, so `bg-accent/15` silently compiles to no rule at all (unlike
+ * `bg-black/40`, which works because black is a real hex in Tailwind's own palette). color-mix does
+ * the job and, unlike a hardcoded rgba, still tracks whichever theme is applied.
+ */
+.tint-accent {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+/* The hover state is baked in rather than exposed as a `hover:` variant: Tailwind only generates
+   variants for utilities it knows about, so `hover:tint-hover` would compile to nothing. */
+.hover-tint:hover {
+  background-color: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
 /* Eraser tool cursor: a flat, filled eraser glyph with a white halo (paint-order: stroke) so it
