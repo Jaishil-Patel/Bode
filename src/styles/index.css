@@ -273,6 +273,20 @@ body {
 }
 
 /*
+ * Full-height side drawers, kept clear of the system bars.
+ *
+ * The app draws edge to edge (`viewport-fit=cover`), so on Android a drawer pinned to `inset-0` puts
+ * its header under the status bar's clock and battery. The insets pad the panel itself rather than
+ * its header: the drawer's own surface still paints behind the bars, so the effect is a taller
+ * header instead of a strip of the page showing through above it. Every inset resolves to 0 on
+ * desktop, where the rule is inert.
+ */
+.drawer-inset {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/*
  * Tinted fills that follow the active theme.
  *
  * Tailwind's opacity modifier cannot produce these: the theme colours are whole `var(--x)` strings

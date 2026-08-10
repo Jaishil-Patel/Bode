@@ -3,6 +3,7 @@ import { useSettings } from "./useSettings";
 import { useViewer } from "../store/viewerStore";
 import { BUILT_IN_THEMES, customThemeVars, type CustomTheme, type ThemeName } from "./themes";
 import { baseNameOf } from "../platform/docId";
+import { isAndroid } from "../platform/files";
 import {
   IconBook,
   IconClose,
@@ -46,13 +47,17 @@ const CUSTOM_FIELDS: { key: keyof CustomTheme; label: string }[] = [
 
 type TabId = "appearance" | "reading" | "interface" | "privacy" | "shortcuts";
 
-const TABS: { id: TabId; label: string; Icon: (p: { className?: string }) => JSX.Element }[] = [
+const ALL_TABS: { id: TabId; label: string; Icon: (p: { className?: string }) => JSX.Element }[] = [
   { id: "appearance", label: "Appearance", Icon: IconPalette },
   { id: "reading", label: "Reading", Icon: IconBook },
   { id: "interface", label: "Interface", Icon: IconSidebar },
   { id: "privacy", label: "Privacy", Icon: IconShield },
   { id: "shortcuts", label: "Shortcuts", Icon: IconKeyboard },
 ];
+
+// Android has no keyboard to press, so the Shortcuts category is a page of key names the reader
+// can never use. It is dropped from the rail there rather than shown as a dead category.
+const TABS = ALL_TABS.filter((t) => t.id !== "shortcuts" || !isAndroid());
 
 /*
  * Every shortcut the global handler in App.tsx actually binds.
@@ -378,7 +383,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
       <div
-        className="animate-fade-in flex h-full w-[560px] max-w-full bg-surface shadow-2xl"
+        className="drawer-inset animate-fade-in flex h-full w-[560px] max-w-full bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* The rail stays icon-width so the drawer still fits a phone once max-w-full clamps it. */}
