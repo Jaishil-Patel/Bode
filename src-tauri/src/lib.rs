@@ -4,9 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{Manager, State};
-#[cfg(desktop)]
-use tauri::Emitter;
+use tauri::{Emitter, Manager, State};
 
 /// Holds the file path the app was launched with (e.g. via "Open with" / file association).
 #[derive(Default)]
@@ -224,6 +222,62 @@ fn decrypt_pdf(bytes: Vec<u8>, password: String) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/*
+ * Dragging a tab between windows.
+ *
+ * A tab torn out of the strip is dropped somewhere on the desktop, and only the backend knows what
+ * is under that point — a webview cannot see past its own window, and HTML drag-and-drop does not
+ * cross OS windows. So the frontend reports where the pointer was released and asks these two
+ * questions: is another Bode window there, and if so, please hand it this document.
+ */
+
+/// Label of another Bode window whose frame contains the given physical screen point, if any.
+/// `exclude` is the dragging window's own label — dropping a tab back on its own window is a
+/// no-op, not a hand-off.
+#[tauri::command]
+fn window_at_point(app: tauri::AppHandle, x: i32, y: i32, exclude: String) -> Option<String> {
+    // A focused window is the one most likely to be on top where frames overlap, and the stacking
+    // order itself isn't something Tauri exposes. Check it first, then everything else.
+    let mut labels: Vec<String> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, w)| *label != exclude && !w.is_minimized().unwrap_or(false))
+        .filter(|(_, w)| {
+            match (w.outer_position(), w.outer_size()) {
+                (Ok(p), Ok(s)) => {
+                    x >= p.x && y >= p.y && x < p.x + s.width as i32 && y < p.y + s.height as i32
+                }
+                _ => false,
+            }
+        })
+        .map(|(label, _)| label)
+        .collect();
+    labels.sort_by_key(|label| {
+        let focused = app
+            .get_webview_window(label)
+            .and_then(|w| w.is_focused().ok())
+            .unwrap_or(false);
+        (!focused, label.clone())
+    });
+    labels.into_iter().next()
+}
+
+/// Hand a document to another Bode window and bring that window forward, on the same event the
+/// OS uses to open a file into a running Bode.
+#[tauri::command]
+fn send_file_to_window(app: tauri::AppHandle, label: String, path: String) -> Result<(), String> {
+    let win = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("No window named {label}"))?;
+    // Desktop only: `unminimize` does not exist on Android, which has no minimised state for a
+    // window to be in. It matters on desktop — handing a document to a minimised window would
+    // otherwise open it somewhere the user cannot see.
+    #[cfg(desktop)]
+    let _ = win.unminimize();
+    let _ = win.set_focus();
+    win.emit("open-file", path).map_err(|e| e.to_string())
+}
+
 /// Return the path Bode was launched with, if any (consumed once).
 #[tauri::command]
 fn take_launch_file(state: State<LaunchFile>) -> Option<String> {
@@ -322,6 +376,8 @@ pub fn run() {
             decrypt_pdf,
             take_launch_file,
             trust_html_file,
+            window_at_point,
+            send_file_to_window,
             set_titlebar_color,
             peer::commands::nearby_status,
             peer::commands::nearby_start_sharing,

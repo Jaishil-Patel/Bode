@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { docKeyFor, type KeyContext } from "../platform/docKey";
+import { DEFAULT_TOOL_ORDER } from "../annotations/tools";
+import type { Tool } from "../annotations/useAnnotations";
 import {
   applyTheme,
   DEFAULT_CUSTOM_THEME,
@@ -23,8 +25,21 @@ export interface LayoutSettings {
   // Which edge the floating annotation/tools bar docks to (vertical on left/right).
   toolsSide: "bottom" | "top" | "left" | "right";
   annotationsHidden: boolean; // hide the floating annotation pill
-  // How additional PDFs open: stacked as tabs in this window, or each in its own OS window.
-  openMode: "tabs" | "windows";
+  /**
+   * Which tools the bar shows and in what order.
+   *
+   * Two flat arrays rather than one object because they have to survive the defensive
+   * `{ ...DEFAULT_LAYOUT, ...saved.layout }` spread in `hydrate` without a merge of their own.
+   * Neither is trusted as read: `normalizeToolbar` in `annotations/tools.ts` reconciles them with
+   * the tools that actually exist, so a settings file written by another version can neither hide
+   * a tool it has never heard of nor leave a hole where a removed one used to be.
+   *
+   * Anything switched off stays reachable — from the bar's ⋯ menu, from its single-key shortcut,
+   * and from the command palette — which is what makes it safe for every tool to be switchable,
+   * `select` included.
+   */
+  toolOrder: Tool[];
+  toolsHidden: Tool[];
   // Allow the Save button to write an unlocked (decrypted) copy of a password-protected PDF.
   removePasswordOnSave: boolean;
 }
@@ -88,7 +103,8 @@ const DEFAULT_LAYOUT: LayoutSettings = {
   sidebarTab: "thumbnails",
   toolsSide: "bottom",
   annotationsHidden: false,
-  openMode: "tabs",
+  toolOrder: DEFAULT_TOOL_ORDER,
+  toolsHidden: [],
   removePasswordOnSave: false,
 };
 

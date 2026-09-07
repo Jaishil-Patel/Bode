@@ -8,7 +8,11 @@ import { isAndroid } from "./files";
  * Returns false when a new window can't be created (e.g. Android), so callers can fall back
  * to opening the file as a tab instead.
  */
-export async function openInNewWindow(path: string): Promise<boolean> {
+export async function openInNewWindow(
+  path: string,
+  /** Where to put the new window, in screen CSS pixels. Used when a tab is dropped on the desktop. */
+  at?: { x: number; y: number },
+): Promise<boolean> {
   // Multi-window isn't available on the Android build.
   if (isAndroid()) return false;
   try {
@@ -22,10 +26,70 @@ export async function openInNewWindow(path: string): Promise<boolean> {
       minWidth: 640,
       minHeight: 480,
       backgroundColor: "#1a1a1a",
+      ...(at ? { x: at.x, y: at.y } : {}),
     });
     return true;
   } catch {
     return false;
+  }
+}
+
+/*
+ * Dragging a tab out of the strip and onto the desktop.
+ *
+ * A webview can only see inside its own window, and HTML drag-and-drop does not cross OS windows,
+ * so the drop point has to be resolved by the backend: it knows every Bode window's frame. These
+ * two helpers are the whole of the frontend's side of that conversation.
+ */
+
+/**
+ * True in a window spawned to hold a torn-off document, rather than the app's original window.
+ * Those carry their file in the URL, which is also what App opens on startup.
+ */
+export const isSpawnedWindow = () =>
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("file");
+
+/**
+ * Hand `path` to whichever other Bode window sits under the given screen point, if any.
+ * Returns false when the drop landed on empty desktop (or on this window), leaving it to the
+ * caller to open a new window instead.
+ */
+export async function handOffToWindowAt(
+  path: string,
+  screenX: number,
+  screenY: number,
+): Promise<boolean> {
+  if (isAndroid()) return false;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    // Pointer screen coordinates are CSS pixels; window frames are physical pixels.
+    const dpr = window.devicePixelRatio || 1;
+    const label = await invoke<string | null>("window_at_point", {
+      x: Math.round(screenX * dpr),
+      y: Math.round(screenY * dpr),
+      exclude: getCurrentWindow().label,
+    });
+    if (!label) return false;
+    await invoke("send_file_to_window", { label, path });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Close this window if it was spawned to hold a single document and that document has just left
+ * it. The app's "main" window stays — closing it would quit Bode out from under the drag.
+ */
+export async function closeIfSpawnedWindow(): Promise<void> {
+  if (isAndroid()) return;
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const win = getCurrentWindow();
+    if (win.label !== "main") await win.close();
+  } catch {
+    // Leave the window up; an empty viewer is a far better outcome than a thrown drag.
   }
 }
 

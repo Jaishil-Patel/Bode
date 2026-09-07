@@ -86,6 +86,10 @@ export default function LinkLayer({ doc, pageNumber, scale }: Props) {
           key={i}
           title={link.url}
           onClick={() => onClick(link)}
+          // Out of the tab order: these are invisible hotspots covering a page's links, and with
+          // form fields now tabbable, leaving them in would stop the caret on every citation
+          // between one field and the next. Clicking still works.
+          tabIndex={-1}
           className="absolute"
           style={{
             left: link.left,

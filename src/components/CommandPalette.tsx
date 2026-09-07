@@ -4,6 +4,8 @@ import { useSettings } from "../settings/useSettings";
 import { useFullscreen } from "../store/fullscreenStore";
 import { BUILT_IN_THEMES } from "../settings/themes";
 import { isRemote } from "../platform/docId";
+import { TOOLS } from "../annotations/tools";
+import { useAnnotations } from "../annotations/useAnnotations";
 
 interface Command {
   id: string;
@@ -56,8 +58,18 @@ export default function CommandPalette({
     if (viewer.filePath && !isRemote(viewer.filePath)) {
       cmds.push({ id: "send", label: "Send this document to a device…", run: onOpenDevices });
     }
-    // Page editing only applies to PDFs.
+    // Page editing and the annotation tools only apply to PDFs.
     if (viewer.doc) {
+      // Every tool is listed whether or not it is on the bar: this and the shortcut key are how a
+      // tool taken off the bar stays findable by someone who has forgotten where they put it.
+      for (const t of TOOLS) {
+        cmds.push({
+          id: `tool-${t.id}`,
+          label: `Tool: ${t.name}`,
+          hint: t.key.toUpperCase(),
+          run: () => useAnnotations.getState().setTool(t.id),
+        });
+      }
       cmds.push({
         id: "organize",
         label: viewer.organizeOpen ? "Close page organizer" : "Organize pages…",

@@ -18,16 +18,36 @@ A clean, fast, customizable PDF reader **and** annotator — that also opens and
   (any colors), layout options (continuous vs single page, sidebar side, page gap),
   and a `Ctrl+K` command palette.
 - **Remembers you** — recent files and last-read page per document, persisted to disk.
+- **Tabs you can rearrange** — drag a tab along the strip to reorder it, pull it out onto the
+  desktop to give it its own window, or drop it on another Bode window to merge the two.
 
 ### Annotate & sign
 - **Highlighter** — select text to highlight, with three editable colour presets.
 - **Freehand pen, shapes & text boxes** — draw, add rectangles/ellipses (outlined or
   filled with adjustable opacity), and drop free text anywhere; tune colour and thickness.
+  A text box's height sets its type size, both as you drag it out and when you resize it
+  later — so sizing the box sizes the writing that goes in it.
 - **Edit existing text** — whiteout + retype: tap a word, it's covered and replaced with an
   editable box pre-filled with the original text, font-matched and width-fitted so the edit
   blends in.
-- **Sign documents** — draw a signature once, then place and resize it on any page.
+- **Sign documents** — draw a signature once, then drag out a box wherever it belongs and the
+  signature is fitted to it. Resize it afterwards like any other annotation.
+- **Fill in forms** — a PDF with real form fields becomes fillable on sight: every text box,
+  tick box, radio button and dropdown is live, required fields are outlined, and a counter
+  takes you to the next one you have missed. Click a signature field and your drawn signature
+  is dropped in, scaled to fit. On a flat or scanned form with no fields at all, the form
+  tool (`F`) looks for the blanks — underscore runs, ruled lines, empty boxes, a label with
+  room after it — and offers each as a dashed suggestion. Click one and you get an ordinary
+  text box sized to it, which you then move, resize, retype or delete like any other.
+- **Saved forms are finished** — saving fills each answer through the form (so the PDF's own
+  font, alignment and comb spacing decide how it looks) and then flattens it into the page.
+  What you send on cannot be edited and looks the same in every viewer. A form you never
+  filled is left interactive, untouched.
 - **Eraser** — tap or drag to selectively remove any annotation.
+- **A toolbar you arrange yourself** — Settings › Interface shows every tool as a named card;
+  tap them on and off the bar and drag them into the order you want. Nothing you switch off is
+  lost: the bar grows a ⋯ button holding the rest, named, and every tool keeps its single-key
+  shortcut and its entry in the command palette either way.
 - **Undo / redo** — full history of every change (`Ctrl+Z` / `Ctrl+Shift+Z`).
 - **Save** — flatten all annotations into a brand-new PDF via a save dialog (the original is
   never modified). Powered by `pdf-lib`.
@@ -166,10 +186,12 @@ yourself with `keytool`, plus a `signingConfig` in the Gradle project.
 | Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Zoom in / out | `Ctrl +` / `Ctrl -` |
 | Reset zoom | `Ctrl+0` |
-| Next / previous page (single-page mode) | `PageDown` / `PageUp` |
+| Scroll the page | `↑` / `↓`, and `←` / `→` when zoomed in past the window |
+| Next / previous page | `PageDown` / `PageUp`, or `←` / `→` |
 | Delete selected annotation | `Delete` |
-| Tools: select / highlight / text / rectangle | `V` / `H` / `T` / `R` |
-| Tools: ellipse / pen / edit text / sign / eraser | `O` / `P` / `E` / `S` / `X` |
+| Tools: select / highlight / pen / eraser | `V` / `H` / `P` / `X` |
+| Tools: text / rectangle / ellipse | `T` / `R` / `O` |
+| Tools: edit text / sign / fill in a form | `E` / `S` / `F` |
 
 ## Project layout
 

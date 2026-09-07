@@ -18,6 +18,7 @@ export type Tool =
   | "pen"
   | "edit"
   | "signature"
+  | "form"
   | "eraser";
 
 interface Base {
@@ -126,6 +127,12 @@ interface AnnotationState {
   highlightPresets: string[]; // exactly 3
   activePreset: number; // 0..2
   selectedId: string | null;
+  /**
+   * Which text box has the caret, if any. Transient, and in the store rather than in the drawing
+   * layer because it is not only that layer's business any more: filling in a detected blank
+   * creates a text box from the form layer and wants it ready to type in straight away.
+   */
+  editingId: string | null;
   signatureDataUrl: string | null; // last drawn signature, reused for quick re-placement
   signaturePadOpen: boolean; // transient: whether the draw-a-signature modal is showing
   // Transient: whether the tool-options pill (colour/thickness/fill) is showing. Opens when a
@@ -148,6 +155,7 @@ interface AnnotationState {
   setHighlightPreset: (i: number, c: string) => void;
   setActivePreset: (i: number) => void;
   setSelected: (id: string | null) => void;
+  setEditingId: (id: string | null) => void;
   setSignatureDataUrl: (url: string | null) => void;
   setSignaturePadOpen: (open: boolean) => void;
   setOptionsOpen: (open: boolean) => void;
@@ -317,6 +325,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     highlightPresets: [...DEFAULT_PRESETS],
     activePreset: 0,
     selectedId: null,
+    editingId: null,
     signatureDataUrl: null,
     signaturePadOpen: false,
     optionsOpen: false,
@@ -423,6 +432,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     setActivePreset: (i) => set({ activePreset: i }),
     // Selecting an annotation opens its options pill so its colour/thickness/fill can be edited.
     setSelected: (id) => set(id ? { selectedId: id, optionsOpen: true } : { selectedId: id }),
+    setEditingId: (id) => set({ editingId: id }),
     setSignatureDataUrl: (url) => {
       set({ signatureDataUrl: url });
       save();
@@ -522,6 +532,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
           past: st.past.slice(0, -1),
           future: [{ byFile: st.byFile, deleted: st.deleted }, ...st.future].slice(0, HISTORY_LIMIT),
           selectedId: null,
+          editingId: null,
         };
       });
       save();
@@ -538,6 +549,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
           future: st.future.slice(1),
           past: [...st.past, { byFile: st.byFile, deleted: st.deleted }].slice(-HISTORY_LIMIT),
           selectedId: null,
+          editingId: null,
         };
       });
       save();

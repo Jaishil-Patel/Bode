@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
+import { setViewport } from "./viewport";
 import PdfPage from "./PdfPage";
 
 const PADDING = 24; // px of breathing room used when fitting
@@ -26,6 +27,20 @@ export default function PdfViewer() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const prevScale = useRef(scale);
+  // Nonce of the last scroll request acted on. Without it every re-run of the effect below —
+  // and a zoom re-runs it, because the row height it reads changes — would replay the last
+  // request, yanking the view back to wherever the document was opened or last jumped to.
+  const appliedNonce = useRef(-1);
+  // A scroll we asked for, and when. While it is in flight the container's offset describes
+  // where the view is coming FROM, so the page tracker below has to sit the animation out
+  // rather than tag the document with a page the user is only passing over.
+  const pendingScroll = useRef<{ top: number; at: number } | null>(null);
+
+  // Hand the scroll container to the keyboard handler in App for as long as this viewer is up.
+  useLayoutEffect(() => {
+    setViewport(scrollRef.current);
+    return () => setViewport(null);
+  });
 
   // Track container size for fit calculations.
   useLayoutEffect(() => {
@@ -176,6 +191,9 @@ export default function PdfViewer() {
       } else if (continuous) {
         el.scrollTop = (currentPage - 1) * rowH;
       }
+      // Whatever a scroll request was still travelling towards was measured at the old zoom, so
+      // it is stale now; this position is the settled one.
+      pendingScroll.current = null;
       prevScale.current = scale;
     }
   }, [scale, rowH, currentPage, continuous, pageGap]);
@@ -190,10 +208,15 @@ export default function PdfViewer() {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         setScrollTop(el.scrollTop);
-        if (continuous && rowH > 0) {
-          const center = el.scrollTop + el.clientHeight / 2;
-          setCurrentPage(Math.min(Math.max(Math.round(center / rowH + 0.5), 1), numPages));
+        if (!continuous || rowH <= 0) return;
+        const p = pendingScroll.current;
+        if (p) {
+          // Arrived, or the user grabbed the scroller mid-flight and the request is now moot.
+          if (Math.abs(el.scrollTop - p.top) < 2 || Date.now() - p.at > 800) pendingScroll.current = null;
+          else return;
         }
+        const center = el.scrollTop + el.clientHeight / 2;
+        setCurrentPage(Math.min(Math.max(Math.round(center / rowH + 0.5), 1), numPages));
       });
     };
     el.addEventListener("scroll", onScroll, { passive: true });
@@ -203,16 +226,26 @@ export default function PdfViewer() {
     };
   }, [continuous, rowH, numPages, setCurrentPage]);
 
-  // Honor programmatic navigation (page jumps, search results, restored position).
+  // Honor programmatic navigation (page jumps, search results, restored position). Each request
+  // is acted on once, by nonce — the effect also re-runs whenever the zoom changes, and replaying
+  // a stale request there is what used to drag the reader back to the page the file opened on.
   useEffect(() => {
-    if (!scrollTarget) return;
+    if (!scrollTarget || appliedNonce.current === scrollTarget.nonce) return;
     const el = scrollRef.current;
     if (!el) return;
+    appliedNonce.current = scrollTarget.nonce;
     if (continuous) {
       // Add the in-page offset for link destinations, leaving a small margin above the target.
       const within = scrollTarget.offsetPts ? scrollTarget.offsetPts * scale - 12 : 0;
-      const top = (scrollTarget.page - 1) * rowH + Math.max(0, within);
-      el.scrollTo({ top, behavior: "smooth" });
+      const max = Math.max(0, el.scrollHeight - el.clientHeight);
+      const top = Math.min((scrollTarget.page - 1) * rowH + Math.max(0, within), max);
+      // Claim the page up front rather than waiting for the scroll to land on it. The zoom may
+      // still be resolving underneath this — the row height it was measured against can change a
+      // frame later — and the anchoring effect above re-derives the offset from the current page,
+      // so having that right is what survives the change.
+      setCurrentPage(scrollTarget.page);
+      pendingScroll.current = { top, at: Date.now() };
+      el.scrollTo({ top, behavior: scrollTarget.instant ? "auto" : "smooth" });
     } else {
       setCurrentPage(scrollTarget.page);
     }

@@ -5,6 +5,8 @@ import { useViewer } from "./store/viewerStore";
 import { useSettings } from "./settings/useSettings";
 import { useFullscreen } from "./store/fullscreenStore";
 import { useAnnotations } from "./annotations/useAnnotations";
+import { toolForKey } from "./annotations/tools";
+import { useFormValues } from "./forms/useFormValues";
 import Toolbar from "./components/Toolbar";
 import TabBar from "./components/TabBar";
 import AnnotationTools from "./components/AnnotationBar";
@@ -15,6 +17,7 @@ import SignaturePad from "./components/SignaturePad";
 import PasswordPrompt from "./components/PasswordPrompt";
 import SettingsPanel from "./settings/SettingsPanel";
 import PdfViewer from "./pdf/PdfViewer";
+import { getViewport } from "./pdf/viewport";
 import MarkdownView from "./markdown/MarkdownView";
 import HtmlView from "./html/HtmlView";
 import { isAndroid } from "./platform/files";
@@ -23,6 +26,10 @@ import { IconOpen, IconZenExit } from "./components/icons";
 
 /** How long the hint, in either form, stays before getting out of the way. */
 const HINT_MS = 2400;
+
+/** How far one arrow-key press nudges the page, in CSS pixels. Roughly three lines of body text. */
+const ARROW_STEP = 72;
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown"]);
 
 /** Browser-style "press Esc to exit" toast, shown briefly each time fullscreen is entered. */
 function FullscreenHint() {
@@ -151,6 +158,7 @@ export default function App() {
   useEffect(() => {
     hydrate();
     useAnnotations.getState().hydrate();
+    useFormValues.getState().hydrate();
     // A window spawned for the "separate windows" open mode carries its file in the URL;
     // otherwise ask the backend for any file-association / "Open with" launch path.
     const fileParam = new URLSearchParams(window.location.search).get("file");
@@ -177,6 +185,7 @@ export default function App() {
 
     // A PDF opened from the OS while Bode is already running arrives here: the single-instance
     // plugin routes it to this window via an "open-file" event. openPath handles tabs vs windows.
+    // Also how a tab dragged from another Bode window and dropped on this one arrives.
     const unlistenP = listen<string>("open-file", (e) => {
       if (e.payload) openPath(e.payload);
     });
@@ -190,7 +199,8 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       const target = e.target as HTMLElement;
-      const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA";
+      const typing =
+        target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
 
       // F11 is unambiguous — nothing else wants it — so it toggles fullscreen from anywhere.
       // Pressed inside an HTML frame it never reaches this listener; HtmlView handles that case.
@@ -269,15 +279,30 @@ export default function App() {
       } else if (mod && e.key === "0") {
         e.preventDefault();
         resetZoom();
-      } else if (!typing && (e.key === "PageDown" || (e.key === "ArrowRight" && !mod))) {
-        if (!layout.continuous) {
-          e.preventDefault();
-          nextPage();
-        }
-      } else if (!typing && (e.key === "PageUp" || (e.key === "ArrowLeft" && !mod))) {
-        if (!layout.continuous) {
-          e.preventDefault();
-          prevPage();
+      } else if (!typing && !mod && SCROLL_KEYS.has(e.key)) {
+        // The scroll container is a plain div, so nothing is focused and the browser scrolls
+        // nothing on its own — every one of these keys has to be driven by hand.
+        const el = getViewport();
+        if (!el) return; // a text view: leave the keys to the browser
+        const back = e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "PageUp";
+        const dir = back ? -1 : 1;
+        const horizontal = e.key === "ArrowLeft" || e.key === "ArrowRight";
+        e.preventDefault();
+        if (horizontal && el.scrollWidth - el.clientWidth > 1) {
+          // Zoomed in past the window: left/right pan across the page, which is the only way
+          // to reach the far edge without a mouse.
+          el.scrollBy({ left: dir * ARROW_STEP });
+        } else if (horizontal) {
+          // Nothing to pan to — the whole width is already on screen, so turn the page instead.
+          if (back) prevPage();
+          else nextPage();
+        } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          el.scrollBy({ top: dir * ARROW_STEP });
+        } else if (layout.continuous) {
+          el.scrollBy({ top: dir * Math.max(el.clientHeight - ARROW_STEP, 120), behavior: "smooth" });
+        } else {
+          if (back) prevPage();
+          else nextPage();
         }
       } else if (!typing && !mod && (e.key === "Delete" || e.key === "Backspace")) {
         const { selectedId, remove } = useAnnotations.getState();
@@ -287,22 +312,13 @@ export default function App() {
           remove(fp, selectedId);
         }
       } else if (!typing && !mod) {
-        // Single-key tool shortcuts.
-        const tools: Record<string, () => void> = {
-          v: () => useAnnotations.getState().setTool("select"),
-          h: () => useAnnotations.getState().setTool("highlight"),
-          t: () => useAnnotations.getState().setTool("text"),
-          r: () => useAnnotations.getState().setTool("rect"),
-          o: () => useAnnotations.getState().setTool("ellipse"),
-          p: () => useAnnotations.getState().setTool("pen"),
-          e: () => useAnnotations.getState().setTool("edit"),
-          s: () => useAnnotations.getState().setTool("signature"),
-          x: () => useAnnotations.getState().setTool("eraser"),
-        };
-        const fn = tools[e.key.toLowerCase()];
-        if (fn) {
+        // Single-key tool shortcuts, read from the registry so they cannot drift from the bar.
+        // They work for every tool, including ones taken off the bar in Settings — a tool being
+        // out of sight is a statement about the bar, not about the keyboard.
+        const t = toolForKey(e.key);
+        if (t) {
           e.preventDefault();
-          fn();
+          useAnnotations.getState().setTool(t.id);
         }
       }
     };

@@ -1,29 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { create } from "zustand";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
-import { useAnnotations } from "../annotations/useAnnotations";
-import {
-  IconCursor,
-  IconHighlight,
-  IconText,
-  IconSquare,
-  IconCircle,
-  IconFill,
-  IconPen,
-  IconEdit,
-  IconSignature,
-  IconEraser,
-  IconTrash,
-  IconChevronDown,
-  IconGrip,
-} from "./icons";
+import { useAnnotations, type Tool } from "../annotations/useAnnotations";
+import { barTools, menuTools, normalizeToolbar, type ToolDef } from "../annotations/tools";
+import { IconFill, IconTrash, IconChevronDown, IconGrip, IconMore, IconPen } from "./icons";
 
 type Side = "bottom" | "top" | "left" | "right";
 
 // Subtle accent tint used for the active tool, theme-aware via color-mix.
 const ACTIVE_BG = "color-mix(in srgb, var(--accent) 22%, transparent)";
 
+/**
+ * One tool.
+ *
+ * Icon only, deliberately: the bar floats over the page and every millimetre it takes is page the
+ * reader cannot see. The names live where there is room for them — in Settings, where you choose
+ * which tools appear, and in the ⋯ menu — so the bar stays as small as it can be.
+ */
 function ToolBtn({
   active,
   title,
@@ -46,6 +41,116 @@ function ToolBtn({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * The tools that are switched off, reachable in one tap.
+ *
+ * This is what makes it safe to let every tool be switched off, `select` included: there is no
+ * arrangement of the settings that can strand a tool somewhere the user cannot get at it.
+ *
+ * The popover is portalled to the body rather than positioned inside the bar, because the bar is
+ * a scroll container (`overflow-x-auto` / `overflow-y-auto`, so a long bar can be swiped on a
+ * phone) and an absolutely-positioned child of one is clipped to it. Portalled, it is positioned
+ * from the button's own rect and opens toward the page on whichever edge the bar is docked to.
+ */
+function MoreTools({
+  tools,
+  side,
+  activeTool,
+  onPick,
+}: {
+  tools: ToolDef[];
+  side: Side;
+  activeTool: Tool;
+  onPick: (id: Tool) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<React.CSSProperties>({});
+
+  useLayoutEffect(() => {
+    if (!open || !btn.current) return;
+    const r = btn.current.getBoundingClientRect();
+    const GAP = 8;
+    const style: React.CSSProperties =
+      side === "bottom"
+        ? { left: r.left + r.width / 2, bottom: window.innerHeight - r.top + GAP, transform: "translateX(-50%)" }
+        : side === "top"
+          ? { left: r.left + r.width / 2, top: r.bottom + GAP, transform: "translateX(-50%)" }
+          : side === "left"
+            ? { left: r.right + GAP, top: r.top + r.height / 2, transform: "translateY(-50%)" }
+            : { right: window.innerWidth - r.left + GAP, top: r.top + r.height / 2, transform: "translateY(-50%)" };
+    setPos(style);
+  }, [open, side, tools.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent | TouchEvent) => {
+      const t = e.target as Node;
+      if (!btn.current?.contains(t) && !pop.current?.contains(t)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    // `mousedown`/`touchstart` rather than `click`, so a tap outside also lands on whatever is
+    // underneath instead of being spent dismissing the menu.
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("touchstart", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("touchstart", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  if (tools.length === 0) return null;
+
+  return (
+    <>
+      <button
+        ref={btn}
+        title={`More tools (${tools.length})`}
+        onClick={() => setOpen((o) => !o)}
+        style={open ? { background: ACTIVE_BG } : undefined}
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
+          open ? "text-accent" : "text-muted hover:bg-white/10"
+        }`}
+      >
+        <IconMore />
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={pop}
+            style={pos}
+            className="animate-fade-in fixed z-50 min-w-[11rem] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl"
+          >
+            {tools.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => {
+                  setOpen(false);
+                  onPick(t.id);
+                }}
+                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-surface-2 ${
+                  activeTool === t.id ? "text-accent" : "text-text"
+                }`}
+              >
+                <span className="shrink-0">
+                  <t.Icon />
+                </span>
+                <span className="flex-1">{t.name}</span>
+                <span className="shrink-0 text-xs text-muted">{t.key.toUpperCase()}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -365,6 +470,8 @@ function ToolsBar({ open }: { open: boolean }) {
   // useSettings. Computed here rather than at each use so the two buttons below cannot drift apart
   // from the lookup above.
   const docKey = useSettings((s) => (filePath ? s.docKey(filePath) : null));
+  const toolOrder = useSettings((s) => s.layout.toolOrder);
+  const toolsHidden = useSettings((s) => s.layout.toolsHidden);
   const vertical = side === "left" || side === "right";
   const {
     tool,
@@ -423,6 +530,25 @@ function ToolsBar({ open }: { open: boolean }) {
   const textContext = tool === "text" || !!selectedText;
   // Show the selected box's own size when one is selected, otherwise the tool default.
   const effectiveFontSize = selectedText ? selectedText.fontSize : fontSize;
+
+  /*
+   * Picking a tool, from the bar or from the ⋯ menu.
+   *
+   * Three tools do more than set the tool, and the behaviour has to be identical wherever the
+   * tool was picked from — which is the reason this is a function rather than a per-button
+   * `onClick` as it was when there was only ever one button per tool.
+   */
+  const activate = (id: Tool) => {
+    if (id === "highlight") pickHighlight(activePreset);
+    else if (id === "signature" && tool === "signature")
+      setSignaturePadOpen(true); // clicking the tool it is already on means "draw a new one"
+    else if (id === "form") setTool(tool === "form" ? "select" : "form");
+    else setTool(id);
+  };
+
+  const toolbar = normalizeToolbar(toolOrder, toolsHidden);
+  const shownTools = barTools(toolbar, tool);
+  const hiddenTools = menuTools(toolbar, tool);
 
   const Divider = () =>
     vertical ? (
@@ -607,79 +733,43 @@ function ToolsBar({ open }: { open: boolean }) {
 
         <Divider />
 
-        <ToolBtn active={tool === "select"} title="Select / move (V)" onClick={() => setTool("select")}>
-          <IconCursor />
-        </ToolBtn>
-
-        <Divider />
-
-        {/* Highlighter with three editable presets */}
-        <button
-          title="Highlighter (H)"
-          onClick={() => pickHighlight(activePreset)}
-          style={tool === "highlight" ? { background: ACTIVE_BG } : undefined}
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
-            tool === "highlight" ? "text-accent" : "text-text hover:bg-white/10"
-          }`}
-        >
-          <IconHighlight />
-        </button>
-        {highlightPresets.map((c, i) => (
-          <div key={i} className="relative h-7 w-7 shrink-0">
-            <button
-              title={`Highlight colour ${i + 1}`}
-              onClick={() => pickHighlight(i)}
-              className={`h-full w-full rounded-full border-2 shadow-inner transition-transform hover:scale-110 ${
-                tool === "highlight" && activePreset === i ? "border-accent" : "border-white/30"
-              }`}
-              style={{ background: c }}
-            />
-            <input
-              type="color"
-              value={c}
-              title="Edit colour"
-              onChange={(e) => setHighlightPreset(i, e.target.value)}
-              className="absolute -bottom-0.5 -right-0.5 h-3 w-3 cursor-pointer rounded-full border border-white/60 p-0"
-              style={{ background: c }}
-            />
-          </div>
+        {/*
+          The tools the user has chosen, in the order they chose, with no group dividers between
+          them: an arrangement someone made themselves cannot also honour groupings someone else
+          decided on. The dividers around the grip and around Delete/Clear stay, so the bar still
+          reads as chrome, tools, chrome.
+        */}
+        {shownTools.map((t) => (
+          <Fragment key={t.id}>
+            <ToolBtn active={tool === t.id} title={t.title} onClick={() => activate(t.id)}>
+              <t.Icon />
+            </ToolBtn>
+            {/* The highlighter's presets belong to it and travel with it when it is reordered. */}
+            {t.id === "highlight" &&
+              highlightPresets.map((c, i) => (
+                <div key={i} className="relative h-7 w-7 shrink-0">
+                  <button
+                    title={`Highlight colour ${i + 1}`}
+                    onClick={() => pickHighlight(i)}
+                    className={`h-full w-full rounded-full border-2 shadow-inner transition-transform hover:scale-110 ${
+                      tool === "highlight" && activePreset === i ? "border-accent" : "border-white/30"
+                    }`}
+                    style={{ background: c }}
+                  />
+                  <input
+                    type="color"
+                    value={c}
+                    title="Edit colour"
+                    onChange={(e) => setHighlightPreset(i, e.target.value)}
+                    className="absolute -bottom-0.5 -right-0.5 h-3 w-3 cursor-pointer rounded-full border border-white/60 p-0"
+                    style={{ background: c }}
+                  />
+                </div>
+              ))}
+          </Fragment>
         ))}
 
-        <Divider />
-
-        {/* Pencil — colour & thickness appear in the floating options pill (see below) */}
-        <ToolBtn active={tool === "pen"} title="Freehand draw (P)" onClick={() => setTool("pen")}>
-          <IconPen />
-        </ToolBtn>
-
-        <ToolBtn active={tool === "eraser"} title="Eraser — click or drag to remove (X)" onClick={() => setTool("eraser")}>
-          <IconEraser />
-        </ToolBtn>
-
-        <ToolBtn active={tool === "text"} title="Text box (T)" onClick={() => setTool("text")}>
-          <IconText />
-        </ToolBtn>
-
-        {/* Shapes — colour, thickness & fill appear in the floating options pill (see below) */}
-        <ToolBtn active={tool === "rect"} title="Rectangle (R)" onClick={() => setTool("rect")}>
-          <IconSquare />
-        </ToolBtn>
-        <ToolBtn active={tool === "ellipse"} title="Ellipse (O)" onClick={() => setTool("ellipse")}>
-          <IconCircle />
-        </ToolBtn>
-
-        <Divider />
-
-        <ToolBtn active={tool === "edit"} title="Edit text (E)" onClick={() => setTool("edit")}>
-          <IconEdit />
-        </ToolBtn>
-        <ToolBtn
-          active={tool === "signature"}
-          title="Sign (S) — click again to draw a new signature"
-          onClick={() => (tool === "signature" ? setSignaturePadOpen(true) : setTool("signature"))}
-        >
-          <IconSignature />
-        </ToolBtn>
+        <MoreTools tools={hiddenTools} side={side} activeTool={tool} onPick={activate} />
 
         <Divider />
 

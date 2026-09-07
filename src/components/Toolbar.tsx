@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
+import { useFormValues } from "../forms/useFormValues";
+import FormStatus from "../forms/FormStatus";
 import { useAnnotations } from "../annotations/useAnnotations";
 import { useFullscreen } from "../store/fullscreenStore";
 import {
@@ -157,6 +159,12 @@ export default function Toolbar({
   } = useViewer();
   const { layout, toggleSidebar } = useSettings();
   const filePath = useViewer((s) => s.filePath);
+  // A filled form that has not been written out yet. Values are safe on disk either way — this is
+  // about the PDF not having them, which is the thing a reader would otherwise not notice.
+  const docKey = useSettings((st) => (filePath ? st.docKey(filePath) : null));
+  const formDirty = useFormValues((st) =>
+    docKey ? (st.byFile[docKey] ? Object.keys(st.byFile[docKey]).length > 0 && st.savedAt[docKey] === undefined : false) : false,
+  );
   const search = useViewer((s) => s.search);
   const textKind = useViewer((s) => s.textKind);
   const isText = useViewer((s) => s.textSource != null);
@@ -289,6 +297,12 @@ export default function Toolbar({
         <span className="hidden sm:inline">
           {fileName ?? "Bode"}
           {isText && textDirty && <span title="Unsaved changes" className="text-accent"> •</span>}
+          {!isText && formDirty && (
+            <span title="Form answers not saved into a PDF yet" className="text-accent">
+              {" "}
+              •
+            </span>
+          )}
         </span>
       </div>
 
@@ -337,6 +351,7 @@ export default function Toolbar({
           <div className="mx-1 hidden h-6 w-px bg-border sm:block" />
         </>
       )}
+      {doc && <FormStatus />}
       {doc && (
         <Btn title="Find (Ctrl+F)" onClick={() => toggleSearch()} active={search.open}>
           <IconSearch />

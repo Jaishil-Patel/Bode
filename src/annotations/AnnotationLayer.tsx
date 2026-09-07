@@ -13,6 +13,7 @@ import {
   type Rect,
 } from "./useAnnotations";
 
+import { fitInside, SIGNATURE_CLICK_WIDTH, useSignatureAspect } from "./signature";
 import { isAndroid } from "../platform/files";
 import { useSettings } from "../settings/useSettings";
 
@@ -21,6 +22,12 @@ const EMPTY: Annotation[] = [];
 // Highlight height as a fraction of the selection's line box. A hair under 1 so stacked lines get
 // a faint separation instead of fusing into one block, while still reading as the full selection.
 const HIGHLIGHT_LINE_SCALE = 0.94;
+
+// A line box as a multiple of the type size — the `lineHeight` text boxes render with, and so
+// the ratio between a box's height and the size of writing that fills it.
+const LINE_RATIO = 1.25;
+const MIN_FONT = 4;
+const MAX_FONT = 200;
 
 // Reused canvas for measuring text width (so the edit box can be sized to match the original).
 let measureCtx: CanvasRenderingContext2D | null = null;
@@ -104,7 +111,19 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   const fontSize = useAnnotations((s) => s.fontSize);
   const fillShapes = useAnnotations((s) => s.fillShapes);
   const fillOpacity = useAnnotations((s) => s.fillOpacity);
-  const { add, update, remove, setSelected, setTool, activeColor } = useAnnotations.getState();
+  const signatureDataUrl = useAnnotations((s) => s.signatureDataUrl);
+  const signatureAspect = useSignatureAspect(signatureDataUrl);
+  const { add, update, remove, setSelected, setEditingId, setTool, activeColor } =
+    useAnnotations.getState();
+
+  /*
+   * Tools under which existing annotations can be picked up rather than drawn over.
+   *
+   * The form tool belongs here as much as select does: a blank filled in on a flat form becomes an
+   * ordinary text box, and it would be strange to have to leave form mode to move, resize or
+   * delete the thing form mode just made.
+   */
+  const selectMode = tool === "select" || tool === "form";
 
   const pageAnnos = useMemo(
     () => all.filter((a) => a.pageIndex === pageIndex),
@@ -117,16 +136,17 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   const [draft, setDraft] = useState<Annotation | null>(null);
   const [drag, setDrag] = useState<Drag>(null);
   // Which text box is in edit mode (caret active). Double-click to enter; blur/deselect to exit.
-  const [editingId, setEditingId] = useState<string | null>(null);
+  // Kept in the store so the form layer can hand a newly filled blank straight to the caret.
+  const editingId = useAnnotations((s) => s.editingId);
   // The page container (our own parent), used as the portal target for the highlight layer.
   const [pageEl, setPageEl] = useState<HTMLElement | null>(null);
   useEffect(() => setPageEl(ref.current?.parentElement ?? null), []);
 
-  // Leave edit mode if the tool changes away from select or another annotation is selected.
+  // Leave edit mode if the tool changes to one that draws, or another annotation is selected.
   useEffect(() => {
-    if (editingId && (tool !== "select" || (selectedId && selectedId !== editingId)))
+    if (editingId && (!selectMode || (selectedId && selectedId !== editingId)))
       setEditingId(null);
-  }, [tool, selectedId, editingId]);
+  }, [selectMode, selectedId, editingId, setEditingId]);
 
   // Tools that draw/place by interacting with the overlay directly. Highlight and edit are
   // NOT here — they work off the real text layer (handled in effects below), so the overlay
@@ -172,35 +192,9 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       return;
     }
 
-    if (tool === "signature") {
-      const { signatureDataUrl, setSignaturePadOpen } = useAnnotations.getState();
-      if (!signatureDataUrl) {
-        // No signature drawn yet — open the pad; the click that follows a save will place it.
-        setSignaturePadOpen(true);
-        return;
-      }
-      // Size to a default width, deriving height from the image's aspect ratio once loaded.
-      const url = signatureDataUrl;
-      const img = new Image();
-      img.onload = () => {
-        const w = 180;
-        const h = img.width > 0 ? (w * img.height) / img.width : 80;
-        const id = newId();
-        add(docKey,{
-          id,
-          pageIndex,
-          type: "signature",
-          color: "#000000",
-          x: p.x,
-          y: p.y,
-          w,
-          h,
-          dataUrl: url,
-        });
-        setTool("select");
-        setSelected(id);
-      };
-      img.src = url;
+    if (tool === "signature" && !signatureDataUrl) {
+      // No signature drawn yet — open the pad; the drag that follows a save will place it.
+      useAnnotations.getState().setSignaturePadOpen(true);
       return;
     }
 
@@ -211,6 +205,20 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       setDraft({ id, pageIndex, type: "pen", color, strokeWidth, points: [p] });
     } else if (tool === "text") {
       setDraft({ id, pageIndex, type: "text", color, x: p.x, y: p.y, w: 0, h: 0, fontSize, text: "" });
+    } else if (tool === "signature") {
+      // Drag out the space to sign in, exactly the way a text box is drawn; the signature is
+      // then fitted to whatever box the drag ends up describing.
+      setDraft({
+        id,
+        pageIndex,
+        type: "signature",
+        color: "#000000",
+        x: p.x,
+        y: p.y,
+        w: 0,
+        h: 0,
+        dataUrl: signatureDataUrl as string,
+      });
     } else {
       setDraft({
         id,
@@ -399,16 +407,39 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     if (!draft) return;
     if (draft.type === "text") {
       const t = draft as TextAnno & { h: number };
-      // A tiny drag is really a click → default-width auto-height box; a real drag keeps the
-      // dragged width and uses its height as the box's minimum.
+      // A tiny drag is really a click → default-width auto-height box at the tool's own size.
+      // A real drag keeps the dragged width, and a dragged *height* also sets the type size, so
+      // one line of writing fills the box that was drawn. That is what makes dragging a box over
+      // a blank on a form worth doing: the box is the size of the answer, not a container the
+      // answer sits small inside. Boxes only ever grow downwards to fit what is typed, so a tall
+      // one is always something the reader asked for rather than something they ended up with —
+      // and resizing afterwards keeps the same ratio.
       const sized = t.w >= 5;
+      const dragged = sized && t.h > 5;
       const anno: TextAnno = sized
-        ? { ...t, w: t.w, h: t.h > 5 ? t.h : undefined }
+        ? {
+            ...t,
+            w: t.w,
+            h: dragged ? t.h : undefined,
+            fontSize: dragged ? fitFont(t.h) : t.fontSize,
+          }
         : { ...t, w: 180, h: undefined };
       add(docKey,anno);
       setTool("select");
       setSelected(anno.id);
       setEditingId(anno.id); // ready to type immediately
+      setDraft(null);
+      start.current = null;
+      return;
+    }
+    if (draft.type === "signature") {
+      const sig = draft as SignatureAnno;
+      // A tiny drag is really a click, and gets a sensible default width; a real drag hands the
+      // signature the box that was drawn, scaled to fill it without distorting the writing.
+      const box = sig.w >= 5 ? sig : { x: sig.x, y: sig.y, w: SIGNATURE_CLICK_WIDTH, h: 0 };
+      add(docKey, { ...sig, ...fitInside(box, signatureAspect) });
+      setTool("select");
+      setSelected(sig.id);
       setDraft(null);
       start.current = null;
       return;
@@ -424,7 +455,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
 
   // ---- Moving existing annotations (select mode) ----
   const startMove = (e: React.PointerEvent, a: Annotation) => {
-    if (tool !== "select") return;
+    if (!selectMode) return;
     e.stopPropagation();
     setSelected(a.id);
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -452,7 +483,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
 
   // Resize a signature from its bottom-right corner, preserving aspect ratio.
   const startResize = (e: React.PointerEvent, a: SignatureAnno) => {
-    if (tool !== "select") return;
+    if (!selectMode) return;
     e.stopPropagation();
     setSelected(a.id);
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -470,18 +501,38 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     window.addEventListener("pointerup", up);
   };
 
-  // Resize a text box from its bottom-right corner. Width is free; height becomes the box's
-  // minimum (the box still grows past it to fit text). No aspect-ratio lock.
+  /** The type size at which a single line of writing fills a box `h` points tall. */
+  const fitFont = (h: number) => Math.min(MAX_FONT, Math.max(MIN_FONT, Math.round(h / LINE_RATIO)));
+
+  /*
+   * Resize a text box from its bottom-right corner.
+   *
+   * Width is free — it decides where the text wraps and nothing else. Height carries the type
+   * size with it: dragging the box to twice the height gives text twice as big, in the same
+   * proportion it had when the drag started, so a box stretched to fill a blank on a form fills
+   * it with writing rather than with empty space. Scaling from the size at the start of the drag
+   * (rather than compounding each move) means dragging back to where you began gives back exactly
+   * the size you began with.
+   */
   const startResizeText = (e: React.PointerEvent, a: TextAnno) => {
-    if (tool !== "select") return;
+    if (!selectMode) return;
     e.stopPropagation();
     setSelected(a.id);
     (e.target as Element).setPointerCapture?.(e.pointerId);
+    // The rendered height, which for a box that has grown to fit its text is taller than `a.h`
+    // and for a fresh one is set by the font alone. Read off the box itself so both cases agree.
+    const box = (e.currentTarget as HTMLElement).parentElement;
+    const startH = Math.max(
+      1,
+      box ? box.getBoundingClientRect().height / scale : (a.h ?? a.fontSize * LINE_RATIO),
+    );
+    const startFont = a.fontSize;
     const move = (ev: PointerEvent) => {
       const r = ref.current!.getBoundingClientRect();
       const w = Math.max(40, (ev.clientX - r.left) / scale - a.x);
-      const h = Math.max(a.fontSize * 1.3, (ev.clientY - r.top) / scale - a.y);
-      update(docKey,a.id, { w, h } as Partial<Annotation>);
+      const h = Math.max(4, (ev.clientY - r.top) / scale - a.y);
+      const fontSize = Math.min(MAX_FONT, Math.max(MIN_FONT, Math.round((startFont * h) / startH)));
+      update(docKey,a.id, { w, h, fontSize } as Partial<Annotation>);
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -560,7 +611,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       pageEl,
     );
 
-  const annoPE = tool === "select" ? "auto" : "none"; // per-annotation pointer events
+  const annoPE = selectMode ? "auto" : "none"; // per-annotation pointer events
 
   const renderShape = (a: Annotation, isDraft: boolean) => {
     if (a.type === "text" || a.type === "signature") return null; // rendered as DOM, not svg
@@ -580,7 +631,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         <g
           key={key}
           onPointerDown={common.onPointerDown}
-          style={{ pointerEvents: tool === "select" ? "all" : "none", cursor: "move" }}
+          style={{ pointerEvents: selectMode ? "all" : "none", cursor: "move" }}
         >
           {highlightRects(a, scale).map((r, i) => (
             <rect key={i} {...r} fill={a.color} fillOpacity={0} />
@@ -711,7 +762,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
           .filter((a) => a.type !== "text" && a.type !== "signature")
           .map((a) => renderShape(withDrag(a), false))}
         {draft && draft.type !== "text" && renderShape(draft, true)}
-        {draft && draft.type === "text" && (
+        {draft && (draft.type === "text" || draft.type === "signature") && (
           <rect
             x={(draft as TextAnno).x * scale}
             y={(draft as TextAnno).y * scale}
@@ -735,7 +786,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
             scale={scale}
             selected={a.id === selectedId}
             editing={editingId === a.id}
-            interactive={tool === "select"}
+            interactive={selectMode}
             pe={annoPE}
             onChangeText={(text) => update(docKey,a.id, { text })}
             onSelect={() => setSelected(a.id)}
@@ -746,9 +797,34 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
               setSelected(a.id);
               setEditingId(a.id);
             }}
-            onEndEdit={() => setEditingId((id) => (id === a.id ? null : id))}
+            onEndEdit={() => {
+              if (useAnnotations.getState().editingId === a.id) setEditingId(null);
+            }}
           />
         ))}
+
+      {/* What the signature will look like in the box being dragged, at the size it will land. */}
+      {draft?.type === "signature" &&
+        (() => {
+          const f = fitInside(draft, signatureAspect);
+          if (f.w < 2) return null;
+          return (
+            <img
+              src={draft.dataUrl}
+              alt=""
+              draggable={false}
+              style={{
+                position: "absolute",
+                left: f.x * scale,
+                top: f.y * scale,
+                width: f.w * scale,
+                height: f.h * scale,
+                opacity: 0.7,
+                pointerEvents: "none",
+              }}
+            />
+          );
+        })()}
 
       {pageAnnos
         .filter((a): a is SignatureAnno => a.type === "signature")
@@ -759,7 +835,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
             <div
               key={a.id}
               onPointerDown={(e) => {
-                if (tool === "select" && !(e.target as HTMLElement).dataset.resize) startMove(e, a);
+                if (selectMode && !(e.target as HTMLElement).dataset.resize) startMove(e, a);
               }}
               style={{
                 position: "absolute",
@@ -769,7 +845,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
                 height: a.h * scale,
                 pointerEvents: annoPE,
                 touchAction: "none", // hold-and-drag on touch; don't let the WebView pan instead
-                cursor: tool === "select" ? "move" : "default",
+                cursor: selectMode ? "move" : "default",
                 outline: selected ? "1px dashed var(--accent)" : "none",
               }}
             >
@@ -779,7 +855,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
                 draggable={false}
                 style={{ width: "100%", height: "100%", display: "block", pointerEvents: "none" }}
               />
-              {selected && tool === "select" && (
+              {selected && selectMode && (
                 <div
                   data-resize="1"
                   title="Drag to resize"

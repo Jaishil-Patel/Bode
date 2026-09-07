@@ -4,6 +4,8 @@ import { useViewer } from "../store/viewerStore";
 import { BUILT_IN_THEMES, customThemeVars, type CustomTheme, type ThemeName } from "./themes";
 import { baseNameOf } from "../platform/docId";
 import { isAndroid } from "../platform/files";
+import { TOOLS } from "../annotations/tools";
+import ToolbarCustomizer from "./ToolbarCustomizer";
 import {
   IconBook,
   IconClose,
@@ -30,8 +32,7 @@ import {
  *
  * Organised as five categories behind an icon rail rather than one long scroll. The settings
  * themselves did not change shape — what changed is that "Layout" used to be a grab bag holding
- * scrolling behaviour, chrome placement and window behaviour at once, so finding anything meant
- * reading all of it.
+ * scrolling behaviour and chrome placement at once, so finding anything meant reading all of it.
  */
 
 const CUSTOM_FIELDS: { key: keyof CustomTheme; label: string }[] = [
@@ -62,8 +63,10 @@ const TABS = ALL_TABS.filter((t) => t.id !== "shortcuts" || !isAndroid());
 /*
  * Every shortcut the global handler in App.tsx actually binds.
  *
- * The old list named seven and invented none, but it also omitted all nine single-key tool
- * shortcuts — which are the ones a user is least likely to discover by clicking around.
+ * The tools group is generated from the registry rather than typed out, because a hand-written
+ * copy of it drifted the moment a tool was added: this list claimed to name every single-key tool
+ * shortcut while silently missing the form tool. Generated, it cannot be wrong again — and the
+ * shortcuts stay listed for tools the user has taken off the bar, since those still work.
  */
 const SHORTCUTS: { group: string; items: [string, string][] }[] = [
   {
@@ -94,16 +97,7 @@ const SHORTCUTS: { group: string; items: [string, string][] }[] = [
   },
   {
     group: "Tools",
-    items: [
-      ["Select", "V"],
-      ["Highlight", "H"],
-      ["Text box", "T"],
-      ["Rectangle / ellipse", "R / O"],
-      ["Pen", "P"],
-      ["Edit text", "E"],
-      ["Signature", "S"],
-      ["Eraser", "X"],
-    ],
+    items: TOOLS.map((t): [string, string] => [t.name, t.key.toUpperCase()]),
   },
   {
     group: "Edit",
@@ -250,8 +244,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         </Row>
         {layout.continuous && (
           <Hint>
-            Page keys and arrows turn pages only when continuous scrolling is off — with it on, they
-            scroll.
+            Arrow keys scroll the page; left and right turn it once there is nothing left to pan to.
           </Hint>
         )}
       </Section>
@@ -284,20 +277,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             onChange={(v) => updateLayout({ annotationsHidden: !v })}
           />
         </Section>
-
-        <Section title="Windows">
-          <Row label="Open PDFs in" description="Where a second document goes when you open one.">
-            <Segmented
-              label="Open PDFs in"
-              value={layout.openMode}
-              options={[
-                { value: "tabs", label: "Tabs" },
-                { value: "windows", label: "Windows" },
-              ]}
-              onChange={(v) => updateLayout({ openMode: v })}
-            />
-          </Row>
-        </Section>
+        <ToolbarCustomizer />
       </>
     ),
 

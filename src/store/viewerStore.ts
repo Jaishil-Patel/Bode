@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readPdfBytes, readTextFile, writeTextFile } from "../platform/files";
 import { baseNameOf, isRemote } from "../platform/docId";
-import { openInNewWindow } from "../platform/window";
 import { renderMarkdown } from "../markdown/renderMarkdown";
 import {
   loadPdfFromBytes,
@@ -24,6 +23,7 @@ import {
   type PageRef,
 } from "../pdf/pageOps";
 import { useAnnotations } from "../annotations/useAnnotations";
+import { useFormValues } from "../forms/useFormValues";
 import type { PdfDocument } from "../pdf/pdfWorker";
 import { useSettings, settingsReady } from "../settings/useSettings";
 
@@ -39,9 +39,19 @@ interface SearchState {
 
 interface ScrollTarget {
   page: number; // 1-based
-  nonce: number; // changes every request so the viewer re-reacts
+  nonce: number; // changes every request so the viewer re-reacts, and only once per request
   offsetPts?: number; // distance from the page top (PDF points @ scale 1) for in-page link jumps
+  /** Jump rather than animate. Used where the destination is a restore, not a navigation. */
+  instant?: boolean;
 }
+
+/**
+ * Monotonic id for scroll requests. A timestamp could repeat within a millisecond, and the viewer
+ * uses this to tell "a new place to go" from "the same request, re-observed" — which is what keeps
+ * a zoom from replaying whatever jump happened to be the last one.
+ */
+let scrollNonce = 0;
+const nextNonce = () => ++scrollNonce;
 
 /** A pending request for the password of an encrypted PDF. Bytes are cached so retries don't re-read. */
 interface PasswordPrompt {
@@ -160,6 +170,8 @@ interface ViewerState {
 
   switchTab: (id: string) => void;
   closeTab: (id: string) => void;
+  /** Move a tab to a new index in the strip (drag-to-reorder). */
+  moveTab: (id: string, toIndex: number) => void;
   close: () => void;
 
   toggleTextEdit: (on?: boolean) => void;
@@ -327,7 +339,7 @@ async function buildPdfSnapshot(
     customScale: 1,
     scale: 1,
     search: emptySearch(),
-    scrollTarget: startPage > 1 ? { page: startPage, nonce: Date.now() } : null,
+    scrollTarget: startPage > 1 ? { page: startPage, nonce: nextNonce(), instant: true } : null,
   };
 }
 
@@ -402,7 +414,7 @@ function commitPages(
     currentPage: page,
     search: search.matches.length ? { ...search, matches: [], current: -1 } : search,
     // Page positions shifted under the reader — re-anchor the scroll on the page they were reading.
-    scrollTarget: { page, nonce: Date.now() },
+    scrollTarget: { page, nonce: nextNonce() },
   });
 }
 
@@ -455,19 +467,11 @@ export const useViewer = create<ViewerState>((set, get) => ({
   },
 
   openPath: async (path: string) => {
-    const layout = useSettings.getState().layout;
-
     // Already open here — just focus its tab.
     const existing = get().tabs.find((t) => t.filePath === path);
     if (existing) {
       get().switchTab(existing.id);
       return;
-    }
-
-    // Separate-windows mode: once this window has a document, send further files to new windows.
-    if (layout.openMode === "windows" && (get().doc || get().textKind)) {
-      if (await openInNewWindow(path)) return;
-      // If a new window couldn't be created, fall through and open as a tab instead.
     }
 
     // Open in a new tab, capturing the outgoing tab's state first.
@@ -594,24 +598,38 @@ export const useViewer = create<ViewerState>((set, get) => ({
     if (!path) return;
     const key = useSettings.getState().docKey(path);
     const annotations = useAnnotations.getState().byFile[key] ?? [];
+    const formValues = useFormValues.getState().byFile[key];
     const password = pdfPasswords.get(path); // set only for PDFs unlocked this session
     // Only pass the manifest when it actually differs, so an untouched document is still saved by
     // drawing on its own pages rather than being rebuilt page by page.
     const manifest = get().hasPageEdits() ? get().pages : undefined;
+    // pdf-lib can't keep the encryption, so saving an encrypted PDF necessarily drops the password.
+    // Only do that when the user has opted in; otherwise point them at the explicit action.
+    if (password && !useSettings.getState().layout.removePasswordOnSave) {
+      set({
+        error:
+          "This PDF is password-protected. Turn on “Remove password when saving” in Settings, or use “Save unlocked copy”.",
+      });
+      return;
+    }
     try {
-      if (password) {
-        // pdf-lib can't keep the encryption, so flattening an encrypted PDF necessarily drops the
-        // password. Only do that when the user has opted in; otherwise point them at the explicit action.
-        if (!useSettings.getState().layout.removePasswordOnSave) {
-          set({
-            error:
-              "This PDF is password-protected. Turn on “Remove password when saving” in Settings, or use “Save unlocked copy”.",
-          });
-          return;
-        }
-        await exportAnnotatedPdf(path, annotations, password, manifest);
-      } else {
-        await exportAnnotatedPdf(path, annotations, undefined, manifest);
+      const result = await exportAnnotatedPdf(
+        path,
+        annotations,
+        password,
+        manifest,
+        formValues,
+      );
+      if (!result.saved) return; // the user cancelled the dialog
+      // The answers are now in a file, so the form is no longer unsaved work.
+      useFormValues.getState().markSaved(key);
+      // Saving normally bakes the answers in; say so when it could not, because the difference
+      // only shows up when someone else opens the file and finds the fields still editable.
+      if (result.formLeftEditable) {
+        set({
+          error:
+            "Saved, but the answers could not be baked into the page — some use characters Bode can't draw. They are still in the file as editable form fields.",
+        });
       }
     } catch (e) {
       set({ error: `Save failed: ${e instanceof Error ? e.message : String(e)}` });
@@ -664,7 +682,10 @@ export const useViewer = create<ViewerState>((set, get) => ({
     if (snap) {
       // Re-issue a scroll to the page the user left off on — the viewer's scroll container
       // keeps its old offset across the switch, so nudge it back to this tab's position.
-      const scrollTarget = { page: snap.currentPage, nonce: Date.now() };
+      // It has to be a jump, not an animation: while a smooth scroll is still travelling, the
+      // container's offset still reads as the *outgoing* tab's position, and the page tracker
+      // would tag this tab with that page before the animation ever arrived.
+      const scrollTarget = { page: snap.currentPage, nonce: nextNonce(), instant: true };
       set({ ...snap, scrollTarget, activeTabId: id, loading: false, error: null });
     } else {
       // Target is still loading (no snapshot yet) — show its name and let the loader publish.
@@ -707,6 +728,18 @@ export const useViewer = create<ViewerState>((set, get) => ({
     } else {
       set({ ...EMPTY_DOC_STATE });
     }
+  },
+
+  moveTab: (id, toIndex) => {
+    const tabs = get().tabs;
+    const from = tabs.findIndex((t) => t.id === id);
+    if (from < 0) return;
+    const to = Math.min(Math.max(toIndex, 0), tabs.length - 1);
+    if (from === to) return;
+    const next = tabs.slice();
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    set({ tabs: next });
   },
 
   close: () => {
@@ -806,7 +839,7 @@ export const useViewer = create<ViewerState>((set, get) => ({
   },
   goToPage: (p) => {
     const page = Math.min(Math.max(1, Math.round(p)), get().numPages || 1);
-    set({ scrollTarget: { page, nonce: Date.now() } });
+    set({ scrollTarget: { page, nonce: nextNonce() } });
   },
   goToPdfDestination: (pageIndex, topPts) => {
     // Outline entries and link targets are resolved against the source document, so translate
@@ -817,7 +850,7 @@ export const useViewer = create<ViewerState>((set, get) => ({
     // Dest y is from the page bottom; convert to a from-top offset using the uniform page height.
     const offsetPts =
       typeof topPts === "number" ? Math.max(0, get().baseSize.height - topPts) : undefined;
-    set({ scrollTarget: { page, offsetPts, nonce: Date.now() } });
+    set({ scrollTarget: { page, offsetPts, nonce: nextNonce() } });
   },
   nextPage: () => get().goToPage(get().currentPage + 1),
   prevPage: () => get().goToPage(get().currentPage - 1),

@@ -109,6 +109,18 @@ export const IconEdit = (p: P) =>
   svg(<><path d="M3 5.5h10" /><path d="M3 12h7" /><path d="M3 18.5h10" /><path d="M19 5v14" /><path d="M17 5h4" /><path d="M17 19h4" /></>, p.className);
 export const IconSignature = (p: P) =>
   svg(<><path d="M3 17c2 0 3-7 5-7s1 5 3 5 2-8 4-8 2 6 4 6" /><path d="M3 21h18" /></>, p.className);
+// Fill in a form: a sheet with two answered blanks and a ticked box.
+export const IconForm = (p: P) =>
+  svg(
+    <>
+      <path d="M5 3h14v18H5z" />
+      <path d="M8 8h8" />
+      <path d="M8 12h8" />
+      <path d="M8 16h3" />
+      <path d="M13.5 16.5l1.5 1.5 2.5-3" />
+    </>,
+    p.className,
+  );
 // Shield: the HTML sandbox. Struck through while a page is trusted (scripts allowed).
 export const IconShield = (p: P) =>
   svg(<path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" />, p.className);

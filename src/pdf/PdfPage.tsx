@@ -4,6 +4,7 @@ import type { SearchMatch } from "./search";
 import { useViewer } from "../store/viewerStore";
 import AnnotationLayer from "../annotations/AnnotationLayer";
 import LinkLayer from "./LinkLayer";
+import FormLayer from "./FormLayer";
 
 interface Props {
   doc: PdfDocument;
@@ -122,6 +123,11 @@ export default function PdfPage({
         canvasContext: ctx,
         viewport,
         transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+        // Leave the editable form fields off the canvas so FormLayer can own them — painting the
+        // baked appearance under a live input would show the old value through the new one.
+        // pdf.js keeps drawing everything that layer does NOT take over: read-only fields, push
+        // buttons and signature fields all still come out exactly as the author drew them.
+        annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
       });
 
       try {
@@ -212,6 +218,15 @@ export default function PdfPage({
           <canvas ref={canvasRef} className="block" />
           <div ref={textLayerRef} className="textLayer" />
           <LinkLayer doc={doc} pageNumber={src} scale={scale} />
+          {filePath && (
+            <FormLayer
+              doc={doc}
+              pageNumber={src}
+              pageIndex={pageNumber - 1}
+              scale={scale}
+              filePath={filePath}
+            />
+          )}
           {filePath && (
             <AnnotationLayer
               filePath={filePath}
