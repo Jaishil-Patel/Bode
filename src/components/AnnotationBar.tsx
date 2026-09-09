@@ -12,6 +12,120 @@ type Side = "bottom" | "top" | "left" | "right";
 // Subtle accent tint used for the active tool, theme-aware via color-mix.
 const ACTIVE_BG = "color-mix(in srgb, var(--accent) 22%, transparent)";
 
+/*
+ * The highlighter palette.
+ *
+ * Curated pastels rather than a raw colour wheel: a highlight has to sit under black text and
+ * stay readable, which rules out most of the spectrum, so offering all of it is a worse tool than
+ * offering the dozen that work. The native picker is still one tap away for anything else.
+ */
+const HIGHLIGHT_PALETTE = [
+  "#fff59d", "#ffe0a3", "#ffd0a3", "#ffc9c9",
+  "#ffb3d9", "#e5c9ff", "#c7d2fe", "#a8dfff",
+  "#a7f3d0", "#d9f99d", "#cfe8d4", "#dcdfe4",
+];
+
+/**
+ * Recolouring one highlighter preset.
+ *
+ * Opened by tapping the preset you are already on — the swatch itself is the affordance, so the
+ * bar carries no extra control and no corner nub. Anchored to that swatch rather than parked in
+ * the shared options pill, because this belongs to the one colour you tapped, not to the tool.
+ */
+function ColorPopover({
+  anchorEl,
+  side,
+  value,
+  onChange,
+  onClose,
+}: {
+  anchorEl: HTMLElement | null;
+  side: Side;
+  value: string;
+  onChange: (c: string) => void;
+  onClose: () => void;
+}) {
+  const pop = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<React.CSSProperties>({});
+
+  useLayoutEffect(() => {
+    if (!anchorEl) return;
+    const r = anchorEl.getBoundingClientRect();
+    const GAP = 10;
+    // Opens away from whichever edge the bar is docked to, so it never covers the bar it came from.
+    const style: React.CSSProperties =
+      side === "bottom"
+        ? { left: r.left + r.width / 2, bottom: window.innerHeight - r.top + GAP, transform: "translateX(-50%)" }
+        : side === "top"
+          ? { left: r.left + r.width / 2, top: r.bottom + GAP, transform: "translateX(-50%)" }
+          : side === "left"
+            ? { left: r.right + GAP, top: r.top + r.height / 2, transform: "translateY(-50%)" }
+            : { right: window.innerWidth - r.left + GAP, top: r.top + r.height / 2, transform: "translateY(-50%)" };
+    setPos(style);
+  }, [anchorEl, side]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      const t = e.target as Node;
+      if (!anchorEl?.contains(t) && !pop.current?.contains(t)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [anchorEl, onClose]);
+
+  return createPortal(
+    <div
+      ref={pop}
+      style={pos}
+      className="animate-fade-in fixed z-50 rounded-xl border border-border bg-surface p-2 shadow-2xl"
+    >
+      <div className="grid grid-cols-4 gap-1.5">
+        {HIGHLIGHT_PALETTE.map((c) => {
+          const on = c.toLowerCase() === value.toLowerCase();
+          return (
+            <button
+              key={c}
+              title={c}
+              onClick={() => onChange(c)}
+              style={{ background: c }}
+              className={`h-7 w-7 rounded-full border-2 shadow-inner ${
+                on ? "border-accent" : "border-black/10"
+              }`}
+            />
+          );
+        })}
+      </div>
+      <label className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1.5 text-xs text-text hover-tint">
+        <span
+          className="h-5 w-5 shrink-0 rounded-full border border-black/10 shadow-inner"
+          style={{
+            // A colour wheel, so "anything else" reads as a choice rather than as a 13th swatch.
+            background:
+              "conic-gradient(#f87171, #fbbf24, #a3e635, #34d399, #22d3ee, #818cf8, #e879f9, #f87171)",
+          }}
+        />
+        Custom…
+        <input
+          type="color"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="sr-only"
+        />
+      </label>
+    </div>,
+    document.body,
+  );
+}
+
 /**
  * One tool.
  *
@@ -503,6 +617,23 @@ function ToolsBar({ open }: { open: boolean }) {
     setTool("highlight");
   };
 
+  /*
+   * Which preset's palette is open, and the swatch it hangs off.
+   *
+   * Tapping a preset selects it; tapping the one already selected offers to recolour it. That
+   * second tap is the whole affordance — the swatch stays a plain circle, and the palette is a
+   * deliberate act rather than something you can hit while reaching for the colour beside it.
+   */
+  const [editing, setEditing] = useState<{ i: number; el: HTMLElement } | null>(null);
+  const onPreset = (i: number, el: HTMLElement) => {
+    if (tool === "highlight" && activePreset === i)
+      setEditing((cur) => (cur?.i === i ? null : { i, el })); // a third tap puts it away again
+    else {
+      setEditing(null);
+      pickHighlight(i);
+    }
+  };
+
   // ---- Drag-to-dock: grab the grip and release over an edge to move the bar there. ----
   /*
    * Pressing the grip collapses the bar and hands the same, still-held gesture to the minimised
@@ -589,21 +720,25 @@ function ToolsBar({ open }: { open: boolean }) {
     );
   };
 
-  // Colour swatch, reused by the pen/shape and text option groups.
-  const colorSwatch = (
+  // A colour swatch whose whole 28px face is the picker: the native input is stretched over it at
+  // zero opacity, so there is never a smaller, separate target to aim at.
+  const swatch = (value: string, onChange: (c: string) => void, title: string) => (
     <label
-      title="Colour for text & shapes"
+      title={title}
       className="relative h-7 w-7 shrink-0 cursor-pointer overflow-hidden rounded-full border-2 border-white/30 shadow-inner"
-      style={{ background: color }}
+      style={{ background: value }}
     >
       <input
         type="color"
-        value={color}
-        onChange={(e) => setColor(e.target.value)}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
         className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
       />
     </label>
   );
+
+  // Colour swatch, reused by the pen/shape and text option groups.
+  const colorSwatch = swatch(color, setColor, "Colour for text & shapes");
 
   // Shared colour swatch + line-thickness slider, rendered next to whichever tool needs it.
   const colorThickness = (
@@ -747,29 +882,36 @@ function ToolsBar({ open }: { open: boolean }) {
             {/* The highlighter's presets belong to it and travel with it when it is reordered. */}
             {t.id === "highlight" &&
               highlightPresets.map((c, i) => (
-                <div key={i} className="relative h-7 w-7 shrink-0">
-                  <button
-                    title={`Highlight colour ${i + 1}`}
-                    onClick={() => pickHighlight(i)}
-                    className={`h-full w-full rounded-full border-2 shadow-inner transition-transform hover:scale-110 ${
-                      tool === "highlight" && activePreset === i ? "border-accent" : "border-white/30"
-                    }`}
-                    style={{ background: c }}
-                  />
-                  <input
-                    type="color"
-                    value={c}
-                    title="Edit colour"
-                    onChange={(e) => setHighlightPreset(i, e.target.value)}
-                    className="absolute -bottom-0.5 -right-0.5 h-3 w-3 cursor-pointer rounded-full border border-white/60 p-0"
-                    style={{ background: c }}
-                  />
-                </div>
+                <button
+                  key={i}
+                  title={
+                    tool === "highlight" && activePreset === i
+                      ? "Tap again to change this colour"
+                      : `Highlight colour ${i + 1}`
+                  }
+                  onClick={(e) => onPreset(i, e.currentTarget)}
+                  className={`h-7 w-7 shrink-0 rounded-full border-2 shadow-inner ${
+                    tool === "highlight" && activePreset === i
+                      ? "border-accent"
+                      : "border-white/30"
+                  }`}
+                  style={{ background: c }}
+                />
               ))}
           </Fragment>
         ))}
 
         <MoreTools tools={hiddenTools} side={side} activeTool={tool} onPick={activate} />
+
+        {editing && (
+          <ColorPopover
+            anchorEl={editing.el}
+            side={side}
+            value={highlightPresets[editing.i]}
+            onChange={(c) => setHighlightPreset(editing.i, c)}
+            onClose={() => setEditing(null)}
+          />
+        )}
 
         <Divider />
 

@@ -14,14 +14,31 @@ import {
 } from "./useAnnotations";
 
 import { fitInside, SIGNATURE_CLICK_WIDTH, useSignatureAspect } from "./signature";
-import { isAndroid } from "../platform/files";
+import { isTouchPrimary } from "../platform/device";
 import { useSettings } from "../settings/useSettings";
+import TextSelectLayer from "./TextSelectLayer";
+import { useTextSelection } from "./useTextSelection";
+import { pageGeom, rangeRects } from "../pdf/textGeometry";
 
 const EMPTY: Annotation[] = [];
+const EMPTY_RECTS: Rect[] = [];
 
 // Highlight height as a fraction of the selection's line box. A hair under 1 so stacked lines get
 // a faint separation instead of fusing into one block, while still reading as the full selection.
 const HIGHLIGHT_LINE_SCALE = 0.94;
+
+/*
+ * Shrink a selection line box to the height a highlight is drawn at.
+ *
+ * Shared by both commit paths — the mouse one below and the touch one in TextSelectLayer — so the
+ * mark cannot land in a different place depending on what you selected it with. Tracking the line
+ * box rather than hugging the glyphs is deliberate: hugging left the committed highlight visibly
+ * smaller than the preview you had just dragged over. The inset is split evenly to stay centred.
+ */
+export const insetLine = (r: Rect): Rect => {
+  const i = (r.h * (1 - HIGHLIGHT_LINE_SCALE)) / 2;
+  return { x: r.x, y: r.y + i, w: r.w, h: r.h - i * 2 };
+};
 
 // A line box as a multiple of the type size — the `lineHeight` text boxes render with, and so
 // the ratio between a box's height and the size of writing that fills it.
@@ -113,6 +130,9 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   const fillOpacity = useAnnotations((s) => s.fillOpacity);
   const signatureDataUrl = useAnnotations((s) => s.signatureDataUrl);
   const signatureAspect = useSignatureAspect(signatureDataUrl);
+  const highlightPresets = useAnnotations((a) => a.highlightPresets);
+  const activePreset = useAnnotations((a) => a.activePreset);
+  const setActivePreset = useAnnotations((a) => a.setActivePreset);
   const { add, update, remove, setSelected, setEditingId, setTool, activeColor } =
     useAnnotations.getState();
 
@@ -237,10 +257,43 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   };
 
   // ---- Highlight by selecting text ----
-  // When the highlight tool is active, let the user select text normally, then turn the
-  // selection's line rectangles into a highlight anchored to this page.
+  /*
+   * Two selections, one commit.
+   *
+   * With a mouse the platform's own text selection is exactly right, and this is unchanged: select,
+   * let go, and the line rectangles become a highlight anchored to this page.
+   *
+   * Touch is where it had to change. The platform selection draws a magnifier the OS pins under
+   * the finger — unmovable from a web page, and squarely under the thumb — so on a touch device
+   * `TextSelectLayer` runs a selection of our own instead and commits through `commitRects` below.
+   * That also retires the old trick of waiting 450ms for `selectionchange` to settle, which was
+   * only ever needed because the platform's drag handles are not DOM elements and never fire a
+   * mouseup to commit on.
+   */
+  const customSelect = isTouchPrimary();
+
+  const commitRects = (rects: Rect[], color: string) => {
+    if (!rects.length) return;
+    add(docKey, { id: newId(), pageIndex, type: "highlight", color, rects: rects.map(insetLine) });
+    useTextSelection.getState().clear();
+  };
+
+  /*
+   * The live selection, painted through the same portal as the committed highlights below rather
+   * than by the layer that handles the gesture. That portal sits under .textLayer and blends with
+   * multiply, which is the only place a tint can go without washing out the glyphs — and it means
+   * the preview and the mark it turns into are composited identically.
+   */
+  const liveSel = useTextSelection((s) => s.sel);
+  const previewRects = useMemo(() => {
+    if (!customSelect || !liveSel || liveSel.pageIndex !== pageIndex || !pageEl) return EMPTY_RECTS;
+    const layer = pageEl.querySelector<HTMLElement>(".textLayer");
+    if (!layer) return EMPTY_RECTS;
+    return rangeRects(pageGeom(layer, scale), liveSel.anchor, liveSel.focus);
+  }, [customSelect, liveSel, pageIndex, pageEl, scale]);
+
   useEffect(() => {
-    if (tool !== "highlight") return;
+    if (tool !== "highlight" || customSelect) return;
     const commit = () => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
@@ -255,16 +308,14 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
           if (cx < pageRect.left || cx > pageRect.right || cy < pageRect.top || cy > pageRect.bottom)
             continue;
           if (r.width < 1 || r.height < 1) continue;
-          // Track the selection's line box so the mark lands where the blue preview showed it —
-          // hugging the glyphs instead left the committed highlight visibly smaller than what you
-          // had just dragged over. The slight inset is split evenly to keep it centred on the text.
-          const inset = (r.height * (1 - HIGHLIGHT_LINE_SCALE)) / 2;
-          rects.push({
-            x: (r.left - pageRect.left) / scale,
-            y: (r.top - pageRect.top + inset) / scale,
-            w: r.width / scale,
-            h: (r.height - inset * 2) / scale,
-          });
+          rects.push(
+            insetLine({
+              x: (r.left - pageRect.left) / scale,
+              y: (r.top - pageRect.top) / scale,
+              w: r.width / scale,
+              h: r.height / scale,
+            }),
+          );
         }
       }
       if (rects.length) {
@@ -273,30 +324,10 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       }
     };
 
-    // Desktop: a drag-select ends with a mouseup, so commit there.
-    // Android: finishing a selection (long-press + dragging the native selection handles) never
-    // fires mouseup — the handles aren't DOM elements — so the highlight used to only land when
-    // a later real click (e.g. tapping the toolbar) happened to fire mouseup while the selection
-    // was still live. Instead watch selectionchange and commit once the selection settles, so the
-    // highlight applies automatically the moment you let go.
-    if (!isAndroid()) {
-      document.addEventListener("mouseup", commit);
-      return () => document.removeEventListener("mouseup", commit);
-    }
-    let settle: ReturnType<typeof setTimeout> | undefined;
-    const onSelectionChange = () => {
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) return; // ignore the collapse our own removeAllRanges causes
-      clearTimeout(settle);
-      // Wait for the user to stop adjusting the selection handles before committing.
-      settle = setTimeout(commit, 450);
-    };
-    document.addEventListener("selectionchange", onSelectionChange);
-    return () => {
-      clearTimeout(settle);
-      document.removeEventListener("selectionchange", onSelectionChange);
-    };
-  }, [tool, scale, docKey, pageIndex, add, activeColor]);
+    // A drag-select ends with a mouseup, so commit there.
+    document.addEventListener("mouseup", commit);
+    return () => document.removeEventListener("mouseup", commit);
+  }, [tool, scale, docKey, pageIndex, add, activeColor, customSelect]);
 
   // ---- Edit existing text (whiteout + retype) ----
   // With the edit tool the overlay stays click-through so the click lands on a text-layer
@@ -607,6 +638,19 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
           .filter((a): a is HighlightAnno => a.type === "highlight")
           .map((a) => renderHighlight(withDrag(a) as HighlightAnno, false))}
         {draft?.type === "highlight" && renderHighlight(draft, true)}
+        {/* Same pastel as .textLayer span::selection, so a touch selection looks like the
+            platform one it replaced. Uninset: the mark insets on commit, matching what the
+            native path has always done. */}
+        {previewRects.map((r, i) => (
+          <rect
+            key={i}
+            x={r.x * scale}
+            y={r.y * scale}
+            width={r.w * scale}
+            height={r.h * scale}
+            fill="#c7d2fe"
+          />
+        ))}
       </svg>,
       pageEl,
     );
@@ -743,10 +787,15 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         // On touch devices the WebView otherwise claims the gesture for scrolling after a few
         // pixels of movement, firing pointercancel and aborting it ("draws a small line then
         // stops"; dragging a placed signature/text box jumps around). Opt out of native panning
-        // so the full pointermove stream reaches us. Unconditional because this overlay is the
-        // common ancestor of every draggable child (shapes, signatures, text boxes) and the
-        // browser intersects touch-action down the ancestor chain, covering select-mode drags too.
-        touchAction: "none",
+        // so the full pointermove stream reaches us. This overlay is the common ancestor of every
+        // draggable child (shapes, signatures, text boxes) and the browser intersects touch-action
+        // down the ancestor chain, so it covers select-mode drags too.
+        //
+        // The highlight tool is the exception, and for the same reason: because the intersection
+        // runs down the chain, "none" here would also reach TextSelectLayer's surface and stop the
+        // page scrolling under a swipe. Nothing is draggable in that mode, so the gestures can go
+        // back to the WebView; the selection drag takes the ones it needs at the point it arms.
+        touchAction: tool === "highlight" && customSelect ? "pan-x pan-y pinch-zoom" : "none",
         // The eraser gets a real eraser-shaped cursor (via .cursor-eraser); other drawing tools
         // use a crosshair. Leave cursor unset for the eraser so the class takes effect.
         cursor: tool === "eraser" ? undefined : captureTool ? "crosshair" : "default",
@@ -756,6 +805,19 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
+      {tool === "highlight" && customSelect && (
+        <TextSelectLayer
+          pageIndex={pageIndex}
+          scale={scale}
+          width={width}
+          height={height}
+          pageEl={pageEl}
+          presets={highlightPresets}
+          activePreset={activePreset}
+          onPick={setActivePreset}
+          onCommit={commitRects}
+        />
+      )}
       {highlightLayer}
       <svg width={width} height={height} style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "visible" }}>
         {pageAnnos
@@ -1002,13 +1064,23 @@ function TextBox({
               color: "#fff",
               background: "var(--accent)",
               borderRadius: "50%",
-              fontSize: 12,
-              lineHeight: 1,
-              fontWeight: 700,
               userSelect: "none",
             }}
           >
-            −
+            {/* Inline rather than <IconClose/>: at 10px inside a 16px badge the shared icon's
+                1.8 stroke scales down to a hairline, so this one needs a heavier weight. */}
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={3}
+              strokeLinecap="round"
+              aria-hidden
+            >
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
           </div>
           <div
             data-resize="1"

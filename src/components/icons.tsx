@@ -72,6 +72,7 @@ export const IconKeyboard = (p: P) =>
 export const IconChevronUp = (p: P) => svg(<path d="m6 15 6-6 6 6" />, p.className);
 export const IconChevronDown = (p: P) => svg(<path d="m6 9 6 6 6-6" />, p.className);
 export const IconChevronRight = (p: P) => svg(<path d="m9 6 6 6-6 6" />, p.className);
+export const IconChevronLeft = (p: P) => svg(<path d="m15 6-6 6 6 6" />, p.className);
 export const IconClose = (p: P) => svg(<path d="M6 6l12 12M18 6 6 18" />, p.className);
 export const IconZen = (p: P) =>
   svg(<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3" />, p.className);

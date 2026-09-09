@@ -6,6 +6,33 @@ import PdfPage from "./PdfPage";
 
 const PADDING = 24; // px of breathing room used when fitting
 const BUFFER = 2; // pages rendered above/below the viewport
+/*
+ * Quiet time after a scale change before the pages are re-rendered crisply.
+ *
+ * A pinch no longer goes through the store at all — it is one commit at the end — so this only
+ * has to absorb a burst of discrete steps, like a held zoom shortcut or a few quick taps on the
+ * toolbar buttons. Short enough to read as immediate.
+ */
+const SETTLE_MS = 70;
+
+/*
+ * The scale to actually re-render bitmaps at.
+ *
+ * A pinch or trackpad zoom produces a new scale on every event — dozens a second — and each one
+ * used to start a page render that the next event cancelled. Holding the render scale still until
+ * the gesture stops turns that into one render per gesture. The zoom itself stays live: layout and
+ * every overlay follow `scale` immediately, and PdfPage stretches the bitmap it already has in the
+ * meantime, so this costs a moment of softness rather than any responsiveness.
+ */
+function useSettledScale(scale: number, ms: number): number {
+  const [settled, setSettled] = useState(scale);
+  useEffect(() => {
+    if (scale === settled) return;
+    const t = setTimeout(() => setSettled(scale), ms);
+    return () => clearTimeout(t);
+  }, [scale, settled, ms]);
+  return settled;
+}
 
 export default function PdfViewer() {
   const {
@@ -59,23 +86,90 @@ export default function PdfViewer() {
   const zoomAnchor = useRef<{ sx: number; sy: number; cx: number; cy: number; s: number } | null>(
     null
   );
+  /** The element holding the pages, transformed directly while a zoom gesture is in flight. */
+  const pagesRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * Live zoom: a CSS transform during the gesture, one real scale change at the end.
+   *
+   * A pinch emits scale changes at the rate of the touch stream. Putting each one through the
+   * store meant React re-rendered every mounted page and all four of its overlays per event,
+   * which is what made a pinch feel like it was catching. A transform on the page container
+   * costs the compositor a matrix and React nothing at all, so the gesture runs at display rate;
+   * the store hears about it once, when the fingers lift.
+   *
+   * The preview and the committed layout agree exactly. A page sits at `pad + i*rowH`, so a zoom
+   * maps y to `pad + (y - pad) * f` while a transform about the focal point maps it to
+   * `fy + (y - fy) * f` — different formulas, but once the scroll correction below is applied
+   * both put a given point at `f * (y - sy - cy) + cy`, so nothing shifts at the handover.
+   */
+  const gesture = useRef<{
+    factor: number;
+    cx: number;
+    cy: number;
+    sx: number;
+    sy: number;
+    s: number;
+    ox: number;
+    oy: number;
+  } | null>(null);
+  const gestureIdle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Zoom gestures: trackpad pinch, mouse ctrl+wheel and touch pinch.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
 
-    const zoomAt = (factor: number, clientX: number, clientY: number) => {
-      if (Math.abs(factor - 1) < 0.0005) return;
+    const beginGesture = (clientX: number, clientY: number) => {
       const r = el.getBoundingClientRect();
-      zoomAnchor.current = {
+      const cx = clientX - r.left;
+      const cy = clientY - r.top;
+      // Horizontally the page is centred by `mx-auto` until it outgrows the viewport, and only
+      // then does it scale about its own left edge. Matching that here keeps a page that fits the
+      // width from sliding sideways under the fingers.
+      const hOverflow = el.scrollWidth > el.clientWidth + 1;
+      gesture.current = {
+        factor: 1,
+        cx,
+        cy,
         sx: el.scrollLeft,
         sy: el.scrollTop,
-        cx: clientX - r.left,
-        cy: clientY - r.top,
         s: useViewer.getState().scale,
+        ox: hOverflow ? cx + el.scrollLeft : el.clientWidth / 2,
+        oy: cy + el.scrollTop,
       };
-      useViewer.getState().zoomBy(factor);
+    };
+
+    const previewGesture = (factor: number) => {
+      const g = gesture.current;
+      const pages = pagesRef.current;
+      if (!g || !pages) return;
+      // Clamp against the same limits the store enforces, so the preview cannot show a zoom the
+      // commit will refuse and then snap back from.
+      const target = Math.min(Math.max(g.s * g.factor * factor, 0.1), 6);
+      g.factor = target / g.s;
+      pages.style.transformOrigin = `${g.ox}px ${g.oy}px`;
+      pages.style.transform = `scale(${g.factor})`;
+    };
+
+    const commitGesture = () => {
+      clearTimeout(gestureIdle.current);
+      const g = gesture.current;
+      gesture.current = null;
+      const pages = pagesRef.current;
+      if (pages) {
+        pages.style.transform = "";
+        pages.style.transformOrigin = "";
+      }
+      if (!g || Math.abs(g.factor - 1) < 0.0005) return;
+      zoomAnchor.current = { sx: g.sx, sy: g.sy, cx: g.cx, cy: g.cy, s: g.s };
+      useViewer.getState().zoomBy(g.factor);
+    };
+
+    /** Wheel zoom has no end event, so idle time stands in for one. */
+    const armIdleCommit = () => {
+      clearTimeout(gestureIdle.current);
+      gestureIdle.current = setTimeout(commitGesture, 90);
     };
 
     // Chromium (WebView2, Android WebView) reports a trackpad pinch as a wheel event with
@@ -88,7 +182,9 @@ export default function PdfViewer() {
       e.preventDefault();
       const d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 100 : e.deltaY;
       const factor = Math.abs(d) < 40 ? Math.exp(-d * 0.012) : d < 0 ? 1.12 : 1 / 1.12;
-      zoomAt(factor, e.clientX, e.clientY);
+      if (!gesture.current) beginGesture(e.clientX, e.clientY);
+      previewGesture(factor);
+      armIdleCommit();
     };
 
     // WebKit (macOS WKWebView, Safari) does not synthesize ctrl+wheel for a trackpad pinch;
@@ -98,19 +194,22 @@ export default function PdfViewer() {
     const onGestureStart = (e: Event) => {
       e.preventDefault();
       gesturing = true;
-      lastGestureScale = (e as GestureEvent).scale || 1;
+      const ge = e as GestureEvent;
+      lastGestureScale = ge.scale || 1;
+      beginGesture(ge.clientX, ge.clientY);
     };
     const onGestureChange = (e: Event) => {
       e.preventDefault();
       const ge = e as GestureEvent;
       if (!ge.scale || lastGestureScale <= 0) return;
-      zoomAt(ge.scale / lastGestureScale, ge.clientX, ge.clientY);
+      previewGesture(ge.scale / lastGestureScale);
       lastGestureScale = ge.scale;
     };
     const onGestureEnd = (e: Event) => {
       e.preventDefault();
       gesturing = false;
       lastGestureScale = 1;
+      commitGesture();
     };
 
     // Two-finger pinch on touch devices (Android). Non-passive so we can prevent the WebView's
@@ -119,25 +218,26 @@ export default function PdfViewer() {
     const dist = (t: TouchList) =>
       Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
     const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 2) lastDist = dist(e.touches);
+      if (e.touches.length !== 2) return;
+      const t = e.touches;
+      lastDist = dist(t);
+      beginGesture((t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2);
     };
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 2) return;
       e.preventDefault();
       const d = dist(e.touches);
       if (lastDist > 0 && d > 0) {
-        const factor = d / lastDist;
-        if (Math.abs(factor - 1) > 0.005) {
-          const t = e.touches;
-          zoomAt(factor, (t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2);
-          lastDist = d;
-        }
-      } else {
-        lastDist = d;
+        // No dead zone: the transform is cheap enough to follow every sample, and skipping the
+        // small ones is what used to make a slow pinch move in steps.
+        previewGesture(d / lastDist);
       }
+      lastDist = d;
     };
     const onTouchEnd = (e: TouchEvent) => {
-      if (e.touches.length < 2) lastDist = 0;
+      if (e.touches.length >= 2) return;
+      lastDist = 0;
+      commitGesture();
     };
 
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -147,7 +247,10 @@ export default function PdfViewer() {
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
     return () => {
+      // A gesture in flight when the viewer unmounts must not leave its scale unrecorded.
+      commitGesture();
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("gesturestart", onGestureStart);
       el.removeEventListener("gesturechange", onGestureChange);
@@ -155,6 +258,7 @@ export default function PdfViewer() {
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
     };
   }, []);
 
@@ -170,6 +274,8 @@ export default function PdfViewer() {
   useEffect(() => {
     setResolvedScale(resolved);
   }, [resolved, setResolvedScale]);
+
+  const renderScale = useSettledScale(scale, SETTLE_MS);
 
   const pageW = baseSize.width * scale;
   const pageH = baseSize.height * scale;
@@ -258,12 +364,17 @@ export default function PdfViewer() {
     const cur = useViewer.getState().currentMatch();
     return (
       <div ref={scrollRef} className="h-full w-full overflow-auto">
-        <div className="flex min-h-full items-start justify-center" style={{ padding: PADDING }}>
+        <div
+          ref={pagesRef}
+          className="flex min-h-full items-start justify-center"
+          style={{ padding: PADDING }}
+        >
           <PdfPage
             doc={doc}
             pageNumber={currentPage}
             srcPage={manifest[currentPage - 1]?.srcPage}
             scale={scale}
+            renderScale={renderScale}
             width={pageW}
             height={pageH}
             visible
@@ -289,6 +400,7 @@ export default function PdfViewer() {
           pageNumber={i + 1}
           srcPage={manifest[i]?.srcPage}
           scale={scale}
+          renderScale={renderScale}
           width={pageW}
           height={pageH}
           visible
@@ -301,7 +413,14 @@ export default function PdfViewer() {
 
   return (
     <div ref={scrollRef} className="h-full w-full overflow-auto">
-      <div style={{ position: "relative", height: numPages * rowH, paddingTop: pageGap / 2 }}>
+      <div
+        ref={pagesRef}
+        style={{
+          position: "relative",
+          height: numPages * rowH,
+          paddingTop: pageGap / 2,
+        }}
+      >
         {pages}
       </div>
     </div>
