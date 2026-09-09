@@ -24,7 +24,7 @@ export default function SearchBar() {
   const pos = search.current >= 0 ? search.current + 1 : 0;
 
   return (
-    <div className="absolute right-4 top-3 z-30 flex items-center gap-1 rounded-lg border border-border bg-surface p-1.5 shadow-lg animate-fade-in">
+    <div className="glass absolute right-4 top-3 z-30 flex items-center gap-1 rounded-lg border border-border bg-surface p-1.5 shadow-lg animate-fade-in">
       <input
         ref={inputRef}
         value={value}

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type ThemeName = "light" | "dark" | "sepia" | "oled" | "custom";
+export type ThemeName = "light" | "dark" | "sepia" | "oled" | "glass" | "custom";
 
 export interface CustomTheme {
   bg: string;
@@ -20,6 +20,7 @@ export const BUILT_IN_THEMES: { name: ThemeName; label: string }[] = [
   { name: "dark", label: "Dark" },
   { name: "sepia", label: "Sepia" },
   { name: "oled", label: "OLED" },
+  { name: "glass", label: "Glass" },
   { name: "custom", label: "Custom" },
 ];
 
@@ -94,7 +95,9 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
 /** Tint the native (Windows) title bar to match the current theme's surface/text colours. */
 function updateNativeTitleBar(): void {
   const cs = getComputedStyle(document.documentElement);
-  const bg = hexToRgb(cs.getPropertyValue("--surface"));
+  // A theme whose surface is translucent (glass) cannot hand its colour to an opaque native bar,
+  // so it names an opaque stand-in; every other theme leaves --titlebar unset and falls back here.
+  const bg = hexToRgb(cs.getPropertyValue("--titlebar") || cs.getPropertyValue("--surface"));
   const text = hexToRgb(cs.getPropertyValue("--text"));
   if (!bg || !text) return;
   invoke("set_titlebar_color", {

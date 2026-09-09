@@ -39,7 +39,7 @@ export default function PasswordPrompt() {
       onClick={cancelPassword}
     >
       <div
-        className="w-[26rem] max-w-[90vw] overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-fade-in"
+        className="glass w-[26rem] max-w-[90vw] overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-fade-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-border px-4 py-3 text-sm font-medium text-text">

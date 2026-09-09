@@ -112,7 +112,7 @@ function OverflowMenu({ actions }: { actions: Action[] }) {
         <IconMore />
       </Btn>
       {open && (
-        <div className="animate-fade-in absolute right-0 top-full z-50 mt-1 min-w-[11rem] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl">
+        <div className="glass animate-fade-in absolute right-0 top-full z-50 mt-1 min-w-[11rem] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl">
           {actions.map((action) => (
             <button
               key={action.id}
@@ -241,7 +241,7 @@ export default function Toolbar({
 
   return (
     <div
-      className="no-select flex min-h-12 items-center gap-0.5 border-b border-border bg-surface px-2 sm:gap-1"
+      className="glass no-select relative z-40 flex min-h-12 items-center gap-0.5 border-b border-border bg-surface px-2 sm:gap-1"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       {/* The sidebar holds thumbnails and the outline, so it only means anything with a PDF open:

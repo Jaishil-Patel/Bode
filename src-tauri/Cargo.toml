@@ -1,6 +1,6 @@
 [package]
 name = "bode"
-version = "0.4.5"
+version = "0.4.6"
 description = "A clean, lightweight, customizable PDF viewer"
 authors = ["you"]
 edition = "2021"

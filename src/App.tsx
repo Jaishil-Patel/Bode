@@ -23,6 +23,7 @@ import MarkdownView from "./markdown/MarkdownView";
 import HtmlView from "./html/HtmlView";
 import { isAndroid } from "./platform/files";
 import { DevicesDrawer, DevicesPanel, StaleBanner } from "./devices/DevicesPanel";
+import GlassFilter from "./components/GlassFilter";
 import { IconOpen, IconZenExit } from "./components/icons";
 
 /** How long the hint, in either form, stays before getting out of the way. */
@@ -418,6 +419,8 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col bg-bg">
+      {/* A filter definition only, drawing nothing. The Glass theme's chrome refracts through it. */}
+      <GlassFilter />
       {/* Fullscreen drops the window chrome so only the document is left. */}
       {!fullscreen && (
         <>

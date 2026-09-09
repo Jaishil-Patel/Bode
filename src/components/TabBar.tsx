@@ -218,7 +218,9 @@ export default function TabBar() {
   return (
     <div
       ref={barRef}
-      className="no-select relative flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1"
+      // `glass-flat`: the strip scrolls horizontally once there are more tabs than fit, and the
+      // theme's refraction layer would scroll away with them. See the note in themes.css.
+      className="glass glass-flat no-select relative z-30 flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1"
     >
       {markerX !== null && (
         <div

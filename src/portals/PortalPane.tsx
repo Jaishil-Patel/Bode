@@ -145,7 +145,7 @@ export default function PortalPane({
   return (
     <div
       onPointerDown={() => raise(docKey, portal.id)}
-      className="animate-fade-in fixed flex flex-col overflow-hidden rounded-xl border border-border shadow-2xl"
+      className="glass animate-fade-in fixed flex flex-col overflow-hidden rounded-xl border border-border shadow-2xl"
       style={{
         left: portal.x,
         top: portal.y,

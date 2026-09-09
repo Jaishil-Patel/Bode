@@ -131,7 +131,7 @@ export default function CommandPalette({
       onClick={onClose}
     >
       <div
-        className="w-[520px] max-w-[90vw] overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-fade-in"
+        className="glass w-[520px] max-w-[90vw] overflow-hidden rounded-xl border border-border bg-surface shadow-2xl animate-fade-in"
         onClick={(e) => e.stopPropagation()}
       >
         <input

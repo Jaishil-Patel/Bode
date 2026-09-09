@@ -115,7 +115,7 @@ function ColorPopover({
     <div
       ref={pop}
       style={pos}
-      className="animate-fade-in fixed z-50 rounded-xl border border-border bg-surface p-2 shadow-2xl"
+      className="glass animate-fade-in fixed z-50 rounded-xl border border-border bg-surface p-2 shadow-2xl"
     >
       <div className="grid grid-cols-4 gap-1.5">
         {HIGHLIGHT_PALETTE.map((c) => {
@@ -274,7 +274,7 @@ function MoreTools({
           <div
             ref={pop}
             style={pos}
-            className="animate-fade-in fixed z-50 min-w-[11rem] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl"
+            className="glass animate-fade-in fixed z-50 min-w-[11rem] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl"
           >
             {tools.map((t) => (
               <button
@@ -489,8 +489,16 @@ const toolsPos = (side: Side): React.CSSProperties =>
     ? { left: "0.75rem", top: "50%", transform: "translateY(-50%)" }
     : { right: "0.75rem", top: "50%", transform: "translateY(-50%)" };
 
+/*
+ * The bar's own glass, which predates the Glass theme and still has to work in all the others.
+ *
+ * The leading `glass` hands the whole recipe over to themes.css when the Glass theme is on: its
+ * blur, refraction and lit rims out-specify the Tailwind utilities that follow, so the bar stops
+ * being a frosted slab and goes properly see-through. In every other theme that class matches
+ * nothing and these utilities are the whole story, exactly as before.
+ */
 const GLASS =
-  "rounded-full border border-white/15 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150";
+  "glass rounded-full border border-white/15 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150";
 const GLASS_BG = "color-mix(in srgb, var(--surface) 42%, transparent)";
 
 /**
@@ -923,9 +931,12 @@ function ToolsBar({ open }: { open: boolean }) {
   // While collapsing, the bar is still on screen but must not intercept anything aimed at the page
   // or at the button growing in behind it.
   const pe = open ? "pointer-events-auto" : "pointer-events-none";
+  // `glass-flat` opts this one element out of the theme's refraction layer, because the bar is its
+  // own scroll container when it holds more tools than fit — see the note in themes.css. The pill
+  // and the minimised button are not scrollers, so they keep the full effect.
   const containerCls = vertical
-    ? `no-select no-scrollbar flex max-h-[calc(100vh-2rem)] flex-col items-center gap-1 overflow-y-auto px-1.5 py-2.5 ${glass}`
-    : `no-select no-scrollbar flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 ${glass}`;
+    ? `no-select no-scrollbar glass-flat flex max-h-[calc(100vh-2rem)] flex-col items-center gap-1 overflow-y-auto px-1.5 py-2.5 ${glass}`
+    : `no-select no-scrollbar glass-flat flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 ${glass}`;
 
   // The tool-options pill (colour/thickness/fill) floats just off the bar's page-facing side. It
   // shows when a drawing tool is freshly picked (or a shape/pen is selected) and collapses once

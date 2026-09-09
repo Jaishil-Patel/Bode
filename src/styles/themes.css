@@ -57,3 +57,143 @@
   --accent-fg: #001014;
   --page-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
+
+/*
+ * Glass — translucent chrome floating over a lit backdrop, in the manner of iOS.
+ *
+ * This is the one theme that is more than a set of colours, and it has to be: a frosted panel needs
+ * a blur, and a blur needs something behind it worth blurring. Both of those live below, scoped to
+ * this theme, so every other theme carries none of the cost.
+ *
+ * The surfaces are as good as clear — --surface is barely there, and what makes a panel legible is
+ * the blur behind it, not the fill in front. That is the whole trick: brightness in the filter lifts
+ * whatever is underneath towards white, so dark text stays readable over a dark page without the
+ * panel ever becoming opaque.
+ *
+ * `color-mix` and Tailwind's opacity-suffixed utilities (`bg-surface-2/40`) both compose correctly
+ * on top of an rgba token, so nothing in the app had to learn about any of this.
+ */
+[data-theme="glass"] {
+  --bg: #e9edf6;
+  --surface: rgba(255, 255, 255, 0.0735);
+  --surface-2: rgba(17, 24, 39, 0.07);
+  --border: rgba(255, 255, 255, 0.4);
+  --text: #0f1218;
+  --muted: #59637a;
+  --accent: #0a84ff;
+  --accent-fg: #ffffff;
+  --page-shadow: 0 10px 34px rgba(15, 23, 42, 0.16);
+  /* The native title bar cannot be translucent, so it gets an opaque stand-in for --surface:
+     roughly what the frosted chrome resolves to once it has composited over the backdrop. */
+  --titlebar: #eef2fa;
+}
+
+/*
+ * The backdrop.
+ *
+ * Percentage-positioned radial gradients rather than a fixed-attachment image, so the same
+ * composition scales down intact into the settings panel's theme preview — which is a 44px-tall
+ * `bg-bg` box carrying its own `data-theme`, and is why the selector matches the element itself as
+ * well as its descendants.
+ *
+ * It is a background *image*, so --bg still paints beneath it and stays the honest answer to "what
+ * colour is this theme" for anything that reads the token.
+ */
+[data-theme="glass"] .bg-bg,
+[data-theme="glass"].bg-bg {
+  background-image:
+    radial-gradient(58% 52% at 10% 6%, rgba(112, 162, 255, 0.42), transparent 70%),
+    radial-gradient(52% 48% at 90% 2%, rgba(179, 136, 255, 0.34), transparent 70%),
+    radial-gradient(66% 58% at 82% 98%, rgba(104, 219, 208, 0.3), transparent 72%),
+    radial-gradient(48% 44% at 22% 100%, rgba(255, 168, 190, 0.28), transparent 70%);
+}
+
+/*
+ * The frost itself.
+ *
+ * `.glass` marks the app's chrome containers — bars, drawers, menus, dialogs — and is inert in every
+ * other theme, which is the point: the class says "this is a surface that would be glass", and only
+ * this block decides what that means.
+ *
+ * Note that backdrop-filter makes each of these a stacking context, so the docked bars carry an
+ * explicit z-index at their call sites; without one the toolbar's dropdown would be confined behind
+ * the document pane.
+ */
+[data-theme="glass"] .glass {
+  backdrop-filter: blur(4.25px) saturate(170%) brightness(1.05);
+  -webkit-backdrop-filter: blur(4.25px) saturate(170%) brightness(1.05);
+}
+
+/*
+ * The refraction layer.
+ *
+ * Frosting is not what makes something look like glass — bending is. This displaces the backdrop
+ * through the SVG filter mounted by GlassFilter.tsx, so what is behind a panel warps the way it
+ * would through something with thickness.
+ *
+ * It has to be a separate layer: `filter` applies to an element's own content, so putting it on
+ * .glass itself would smear the toolbar's icons and labels rather than what is behind them. An
+ * empty pseudo-element has no content to ruin, and only its backdrop is left to bend.
+ *
+ * Two details make it work without a single change at any call site. It needs no
+ * `position: relative` on the parent, because the backdrop-filter above already makes every .glass
+ * element a containing block for absolutely positioned descendants. And `z-index: -1` puts it
+ * behind the panel's own translucent fill and its content while staying trapped inside the panel,
+ * because that same backdrop-filter also makes the element a stacking context.
+ *
+ * The one place it cannot go is an element that is its own scroll container. An absolutely
+ * positioned box inside a scroller is laid out against the padding box and then travels with the
+ * content, so the layer would slide out from under a bar the moment that bar scrolled — leaving the
+ * far end unrefracted. Those elements say so with `glass-flat` and keep the frost without it.
+ *
+ * If scrolling a document under the bars ever feels heavy, this block is the thing to delete: the
+ * theme degrades to plain frosted glass and nothing else changes.
+ */
+[data-theme="glass"] .glass:not(.glass-flat)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  filter: url(#glass-distortion);
+}
+
+/* Lit rims and a cast shadow.
+   With almost no fill left, these are the only things drawing the outline of a panel, so they carry
+   more weight here than they would in a theme that could rely on a solid background. Two rims
+   rather than one: a bright top-left and a softer bottom-right read as a bevel catching a light
+   from above, which is what gives the edge somewhere to refract towards. */
+[data-theme="glass"] .glass.border,
+[data-theme="glass"] .glass.border-b,
+[data-theme="glass"] .glass.border-r {
+  box-shadow: inset 2px 2px 1px -1px rgba(255, 255, 255, 0.7),
+    inset -1px -1px 1px 1px rgba(255, 255, 255, 0.45), 0 12px 40px rgba(15, 23, 42, 0.16);
+}
+
+/*
+ * The scrim behind a dialog or drawer.
+ *
+ * Every other theme dims the app behind a modal, and dimming is exactly wrong for a panel with no
+ * fill of its own: the panel would inherit that darkness through itself and then ask dark text to
+ * sit on it. So here the scrim lightens and softens instead — the content behind still recedes,
+ * but it recedes towards white, which is the surface the panel needs underneath it.
+ */
+[data-theme="glass"] .bg-black\/40 {
+  background-color: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(3px) saturate(130%);
+  -webkit-backdrop-filter: blur(3px) saturate(130%);
+}
+
+/*
+ * The annotation bar's stepper well.
+ *
+ * The tools bar tints its number stepper with a flat `bg-black/10`, which is the one thing left
+ * inside the bar that still reads as painted-on rather than seen-through. Inverting it to a pale
+ * wash keeps the well legible as a recess without putting a grey block in the middle of the glass.
+ */
+[data-theme="glass"] .bg-black\/10 {
+  background-color: rgba(255, 255, 255, 0.1);
+}

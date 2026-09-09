@@ -78,14 +78,14 @@ export default function Sidebar() {
   // into the navigation list would make a plain click ambiguous.
   if (organizeOpen && doc) {
     return (
-      <div className="no-select flex h-full w-56 flex-col border-r border-border bg-surface">
+      <div className="glass no-select relative z-30 flex h-full w-56 flex-col border-r border-border bg-surface">
         <PageOrganizer />
       </div>
     );
   }
 
   return (
-    <div className="no-select flex h-full w-56 flex-col border-r border-border bg-surface">
+    <div className="glass no-select relative z-30 flex h-full w-56 flex-col border-r border-border bg-surface">
       <div className="flex border-b border-border">
         {(["thumbnails", "outline"] as const).map((t) => (
           <button

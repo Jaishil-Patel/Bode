@@ -42,7 +42,7 @@ export function DevicesDrawer({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
       <div
-        className="drawer-inset flex h-full w-[380px] max-w-[92vw] flex-col bg-surface shadow-2xl animate-fade-in"
+        className="glass drawer-inset flex h-full w-[380px] max-w-[92vw] flex-col bg-surface shadow-2xl animate-fade-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border px-5 py-4">

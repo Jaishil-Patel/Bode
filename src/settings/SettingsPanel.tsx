@@ -352,7 +352,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
       <div
-        className="drawer-inset animate-fade-in flex h-full w-[560px] max-w-full bg-surface shadow-2xl"
+        className="glass drawer-inset animate-fade-in flex h-full w-[560px] max-w-full bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* The rail stays icon-width so the drawer still fits a phone once max-w-full clamps it. */}
