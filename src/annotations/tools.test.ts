@@ -21,7 +21,7 @@ const ids = (list: { id: Tool }[]) => list.map((t) => t.id);
 
 describe("normalizeToolbar", () => {
   it("keeps a complete saved order exactly as it was", () => {
-    const saved: Tool[] = ["form", "pen", "select", "highlight", "eraser", "text", "rect", "ellipse", "edit", "signature"];
+    const saved: Tool[] = [...DEFAULT_TOOL_ORDER].reverse();
     expect(normalizeToolbar(saved, []).order).toEqual(saved);
   });
 
@@ -86,7 +86,10 @@ describe("barTools / menuTools", () => {
     const shown = ids(barTools(layout, "eraser"));
     expect(shown).toContain("eraser");
     expect(shown).not.toContain("form");
-    expect(shown.indexOf("eraser")).toBe(3); // and in its own place, not appended
+    // In its own place, not appended: it still sits where the saved order puts it.
+    const expected = DEFAULT_TOOL_ORDER.filter((id) => id !== "form").indexOf("eraser");
+    expect(shown.indexOf("eraser")).toBe(expected);
+    expect(shown.indexOf("eraser")).toBeLessThan(shown.length - 1);
   });
 
   it("offers the rest in the More menu, minus whatever the bar is already showing", () => {

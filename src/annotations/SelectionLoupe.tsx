@@ -15,8 +15,6 @@ import type { Rect } from "../pdf/textGeometry";
 const W = 168; // CSS px
 const H = 92;
 const MAG = 2.2; // magnification relative to what is on screen
-/** How far above the finger to centre the view, so the fingertip is not the subject. */
-const LIFT = 20;
 const MARGIN = 8;
 /** Keep clear of the selection by this much before considering a corner occupied. */
 const AVOID = 24;
@@ -102,11 +100,13 @@ const SelectionLoupe = forwardRef<LoupeHandle, Props>(function SelectionLoupe(
         out.height = H * dpr;
       }
 
-      // Source window in bitmap pixels, centred above the fingertip and clamped to the page.
+      // Source window in bitmap pixels, centred on the touch point and clamped to the page.
+      // Centred exactly, with no upward lift: the loupe is off in a corner rather than under the
+      // hand, so there is nothing to see around — an offset just shows the wrong line.
       const sw = (W / MAG) * bmp;
       const sh = (H / MAG) * bmp;
       const rawX = (aim.x - pageRect.left) * bmp - sw / 2;
-      const rawY = (aim.y - LIFT - pageRect.top) * bmp - sh / 2;
+      const rawY = (aim.y - pageRect.top) * bmp - sh / 2;
       const sx = Math.min(Math.max(rawX, 0), Math.max(0, src.width - sw));
       const sy = Math.min(Math.max(rawY, 0), Math.max(0, src.height - sh));
 

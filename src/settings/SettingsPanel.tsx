@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useSettings } from "./useSettings";
 import { useViewer } from "../store/viewerStore";
 import { BUILT_IN_THEMES, customThemeVars, type CustomTheme, type ThemeName } from "./themes";
-import { baseNameOf } from "../platform/docId";
 import { isAndroid } from "../platform/files";
 import { TOOLS } from "../annotations/tools";
 import ToolbarCustomizer from "./ToolbarCustomizer";
@@ -161,12 +160,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     customTheme,
     layout,
     recents,
-    trustedHtml,
     setTheme,
     setCustomThemeVar,
     updateLayout,
     clearRecents,
-    setHtmlTrust,
   } = useSettings();
 
   const [tab, setTab] = useState<TabId>("appearance");
@@ -192,6 +189,25 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               />
             ))}
           </div>
+        </Section>
+
+        <Section title="Page">
+          <Row
+            label="Page colours"
+            description="A theme restyles the app; this carries it through to the document."
+          >
+            <Segmented
+              label="Page colours"
+              value={layout.pageColors}
+              options={[
+                { value: "normal", label: "Normal" },
+                { value: "auto", label: "Auto" },
+                { value: "inverted", label: "Dark" },
+              ]}
+              onChange={(v) => updateLayout({ pageColors: v })}
+            />
+          </Row>
+          <Hint>Auto follows the theme, so a dark theme gets dark pages.</Hint>
         </Section>
 
         {theme === "custom" ? (
@@ -270,12 +286,6 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               onChange={(v: Edge) => updateLayout({ toolsSide: v })}
             />
           </Row>
-          <ToggleRow
-            label="Show annotation tools"
-            description="Hidden, the tools collapse to a single button over the page."
-            checked={!layout.annotationsHidden}
-            onChange={(v) => updateLayout({ annotationsHidden: !v })}
-          />
         </Section>
         <ToolbarCustomizer />
       </>
@@ -305,27 +315,6 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             </>
           ) : (
             <EmptyNote>Open a password-protected PDF to see its options here.</EmptyNote>
-          )}
-        </Section>
-
-        <Section title="Trusted pages">
-          <Hint>
-            HTML files you allowed to run scripts. Everything else opens in a sandbox with scripting
-            off.
-          </Hint>
-          {trustedHtml.length === 0 ? (
-            <EmptyNote>No pages trusted.</EmptyNote>
-          ) : (
-            <ul className="flex flex-col">
-              {trustedHtml.map((p) => (
-                <li key={p} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5">
-                  <span className="min-w-0 truncate text-sm text-text" title={p}>
-                    {baseNameOf(p)}
-                  </span>
-                  <QuietButton onClick={() => setHtmlTrust(p, false)}>Revoke</QuietButton>
-                </li>
-              ))}
-            </ul>
           )}
         </Section>
 

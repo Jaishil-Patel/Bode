@@ -14,16 +14,19 @@
 
 import type { Tool } from "./useAnnotations";
 import {
-  IconCircle,
   IconCursor,
   IconEdit,
   IconEraser,
   IconForm,
   IconHighlight,
   IconPen,
+  IconPin,
+  IconShapes,
   IconSignature,
-  IconSquare,
+  IconSquiggly,
+  IconStrikeout,
   IconText,
+  IconUnderline,
 } from "../components/icons";
 
 export interface ToolDef {
@@ -50,6 +53,27 @@ export interface ToolDef {
 export const TOOLS: readonly ToolDef[] = [
   { id: "select", name: "Select", title: "Select / move (V)", key: "v", Icon: IconCursor },
   { id: "highlight", name: "Highlight", title: "Highlighter (H)", key: "h", Icon: IconHighlight },
+  {
+    id: "underline",
+    name: "Underline",
+    title: "Underline selected text (U)",
+    key: "u",
+    Icon: IconUnderline,
+  },
+  {
+    id: "strikeout",
+    name: "Strike",
+    title: "Strike through selected text (K)",
+    key: "k",
+    Icon: IconStrikeout,
+  },
+  {
+    id: "squiggly",
+    name: "Squiggle",
+    title: "Squiggly underline on selected text (G)",
+    key: "g",
+    Icon: IconSquiggly,
+  },
   { id: "pen", name: "Pen", title: "Freehand draw (P)", key: "p", Icon: IconPen },
   {
     id: "eraser",
@@ -59,8 +83,7 @@ export const TOOLS: readonly ToolDef[] = [
     Icon: IconEraser,
   },
   { id: "text", name: "Text", title: "Text box (T)", key: "t", Icon: IconText },
-  { id: "rect", name: "Rectangle", title: "Rectangle (R)", key: "r", Icon: IconSquare },
-  { id: "ellipse", name: "Ellipse", title: "Ellipse (O)", key: "o", Icon: IconCircle },
+  { id: "shape", name: "Shape", title: "Shapes (R) — pick square or ellipse in the options", key: "r", Icon: IconShapes },
   { id: "edit", name: "Edit", title: "Edit text (E)", key: "e", Icon: IconEdit },
   {
     id: "signature",
@@ -70,6 +93,13 @@ export const TOOLS: readonly ToolDef[] = [
     Icon: IconSignature,
   },
   { id: "form", name: "Form", title: "Fill in a form (F)", key: "f", Icon: IconForm },
+  {
+    id: "pin",
+    name: "Pin",
+    title: "Pin a region (N) — drag round a figure to keep it on screen while you read",
+    key: "n",
+    Icon: IconPin,
+  },
 ];
 
 const BY_ID = new Map(TOOLS.map((t) => [t.id, t]));

@@ -290,6 +290,16 @@ export function boundsOf(rects: Rect[]): Rect | null {
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
+/** The whole page, in DOM order — what "Select all" selects. */
+export function allOf(g: PageGeom): [CharPos, CharPos] | null {
+  if (!g.spans.length) return null;
+  const last = g.spans.length - 1;
+  return [
+    { span: 0, ch: 0 },
+    { span: last, ch: g.spans[last].text.length },
+  ];
+}
+
 /** Expand a position to the word around it — what a long press should select. */
 export function wordAt(g: PageGeom, p: CharPos): [CharPos, CharPos] {
   const sp = g.spans[p.span];

@@ -12,13 +12,23 @@ import { mergeAnnotationSets, pruneTombstones, type AnnotationSet } from "./merg
 export type Tool =
   | "select"
   | "highlight"
+  | "underline"
+  | "strikeout"
+  | "squiggly"
   | "text"
-  | "rect"
-  | "ellipse"
+  /**
+   * One tool for every closed shape; which one it draws is `shapeKind`.
+   *
+   * The annotations are still stored as "rect" and "ellipse" — only the *tool* was merged, so
+   * nothing already drawn has to change, and adding a third shape later costs a bar slot of
+   * nothing rather than another button.
+   */
+  | "shape"
   | "pen"
   | "edit"
   | "signature"
   | "form"
+  | "pin"
   | "eraser";
 
 interface Base {
@@ -45,6 +55,38 @@ export interface HighlightAnno extends Base {
   // One rectangle per selected text line (the highlighted quads).
   rects: Rect[];
 }
+/*
+ * Underline, strikethrough and squiggle.
+ *
+ * They differ only in where the line is drawn across the same rectangles — selection geometry,
+ * the commit path, the eraser, dragging and the export are identical for all three — so the
+ * shape is shared and only the tag differs. Three interfaces rather than one carrying a union
+ * `type`, because TypeScript only narrows a discriminated union cleanly when each member's
+ * discriminant is a single literal: with a union tag, the *else* branch cannot rule the member
+ * out, and every later branch is left holding it.
+ */
+interface MarkupBase extends Base {
+  /** One rectangle per selected line, exactly as a highlight stores them. */
+  rects: Rect[];
+  /**
+   * Line weight, as a multiple of the weight derived from the height of the text being marked.
+   *
+   * A multiplier rather than a thickness in points, because an underline has to stay in
+   * proportion to what it underlines: the same absolute weight that looks right under body text
+   * is a smear under a footnote. Optional so marks made before this existed still render.
+   */
+  weight?: number;
+}
+export interface UnderlineAnno extends MarkupBase {
+  type: "underline";
+}
+export interface StrikeoutAnno extends MarkupBase {
+  type: "strikeout";
+}
+export interface SquigglyAnno extends MarkupBase {
+  type: "squiggly";
+}
+export type MarkupAnno = UnderlineAnno | StrikeoutAnno | SquigglyAnno;
 export interface RectAnno extends Base {
   type: "rect";
   x: number;
@@ -64,6 +106,40 @@ export interface EllipseAnno extends Base {
   strokeWidth: number;
   filled: boolean;
   fillOpacity: number;
+}
+export interface TriangleAnno extends Base {
+  type: "triangle";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  strokeWidth: number;
+  filled: boolean;
+  fillOpacity: number;
+}
+/*
+ * Line and arrow.
+ *
+ * The same four numbers as the closed shapes, read differently: (x, y) is where the drag started
+ * and (x + w, y + h) is where it ended, so w and h may be negative. The closed shapes normalise
+ * their box while it is dragged, which is right for them and destroys a line — an arrow drawn up
+ * and to the left would come out pointing down and to the right.
+ */
+export interface LineAnno extends Base {
+  type: "line";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  strokeWidth: number;
+}
+export interface ArrowAnno extends Base {
+  type: "arrow";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  strokeWidth: number;
 }
 export interface PenAnno extends Base {
   type: "pen";
@@ -101,10 +177,54 @@ export interface SignatureAnno extends Base {
   h: number;
   dataUrl: string; // trimmed PNG of the drawn signature
 }
+/** Every annotation whose geometry is a run of line rectangles taken from a text selection. */
+/** Neutral weight: a mark drawn exactly at the size its text implies. */
+export const DEFAULT_MARK_WEIGHT = 1;
+/*
+ * The slider's range, either side of neutral.
+ *
+ * Wide on purpose. The first version spanned 0.4x-2.6x of a base that was itself thin, and with
+ * an absolute floor underneath it: on body text the bottom half of the travel was clamped flat
+ * and the top only reached about two points, so dragging the slider looked like it did nothing.
+ * A thickness control has to visibly change the thickness across its whole travel.
+ */
+export const MARK_WEIGHT_MIN = 0.35;
+export const MARK_WEIGHT_MAX = 3;
+
+/** The shapes the one shape tool can draw, in the order the picker offers them. */
+export const SHAPE_KINDS = ["rect", "ellipse", "triangle", "line", "arrow"] as const;
+export type ShapeKind = (typeof SHAPE_KINDS)[number];
+
+/** Closed shapes take a fill; the open ones are a stroke and nothing else. */
+export const isClosedShape = (k: ShapeKind): boolean => k !== "line" && k !== "arrow";
+
+/** Anything drawn by the shape tool, all of which share the same four-number box. */
+export const isShapeAnno = (
+  a: Annotation,
+): a is RectAnno | EllipseAnno | TriangleAnno | LineAnno | ArrowAnno =>
+  (SHAPE_KINDS as readonly string[]).includes(a.type);
+
+export const isRectsAnno = (a: Annotation): a is HighlightAnno | MarkupAnno =>
+  a.type === "highlight" ||
+  a.type === "underline" ||
+  a.type === "strikeout" ||
+  a.type === "squiggly";
+
+/** The tools that mark up selected text, rather than drawing something at a point. */
+export const TEXT_MARKUP_TOOLS = ["highlight", "underline", "strikeout", "squiggly"] as const;
+export const isMarkupTool = (t: Tool): boolean =>
+  (TEXT_MARKUP_TOOLS as readonly string[]).includes(t);
+
 export type Annotation =
   | HighlightAnno
+  | UnderlineAnno
+  | StrikeoutAnno
+  | SquigglyAnno
   | RectAnno
   | EllipseAnno
+  | TriangleAnno
+  | LineAnno
+  | ArrowAnno
   | PenAnno
   | TextAnno
   | SignatureAnno;
@@ -121,6 +241,10 @@ interface AnnotationState {
   tool: Tool;
   color: string; // used for text & shapes
   strokeWidth: number;
+  /** Weight of a new underline/strike/squiggle, as a multiple of the text-derived base. */
+  markWeight: number;
+  /** Which shape the one shape tool draws. */
+  shapeKind: ShapeKind;
   fontSize: number;
   fillShapes: boolean; // whether new rect/ellipse shapes are filled
   fillOpacity: number; // 0..1 opacity for shape fills
@@ -149,6 +273,8 @@ interface AnnotationState {
   setTool: (t: Tool) => void;
   setColor: (c: string) => void;
   setStrokeWidth: (w: number) => void;
+  setMarkWeight: (w: number) => void;
+  setShapeKind: (k: ShapeKind) => void;
   setFontSize: (s: number) => void;
   setFillShapes: (v: boolean) => void;
   setFillOpacity: (v: number) => void;
@@ -200,6 +326,8 @@ type Persisted = Pick<
   | "deleted"
   | "color"
   | "strokeWidth"
+  | "markWeight"
+  | "shapeKind"
   | "fontSize"
   | "fillShapes"
   | "fillOpacity"
@@ -233,7 +361,7 @@ function migrate(byFile: Record<string, Annotation[]>): Record<string, Annotatio
         const o = next as unknown as { x: number; y: number; w: number; h: number };
         next = { ...next, rects: [{ x: o.x, y: o.y, w: o.w, h: o.h }] } as Annotation;
       }
-      if (next.type === "rect" || next.type === "ellipse") {
+      if (next.type === "rect" || next.type === "ellipse" || next.type === "triangle") {
         const patch: Partial<RectAnno> = {};
         if (typeof next.filled !== "boolean") patch.filled = false;
         if (typeof next.fillOpacity !== "number") patch.fillOpacity = 0.35;
@@ -264,6 +392,8 @@ function snapshot(s: AnnotationState): Persisted {
     deleted: s.deleted,
     color: s.color,
     strokeWidth: s.strokeWidth,
+    markWeight: s.markWeight,
+    shapeKind: s.shapeKind,
     fontSize: s.fontSize,
     fillShapes: s.fillShapes,
     fillOpacity: s.fillOpacity,
@@ -319,6 +449,8 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     tool: "select",
     color: "#ef4444",
     strokeWidth: 2,
+    markWeight: DEFAULT_MARK_WEIGHT,
+    shapeKind: "rect",
     fontSize: 16,
     fillShapes: false,
     fillOpacity: 0.35,
@@ -342,6 +474,10 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
             deleted: migrateTombstones(saved.deleted ?? {}),
             color: saved.color ?? "#ef4444",
             strokeWidth: saved.strokeWidth ?? 2,
+            markWeight: saved.markWeight ?? DEFAULT_MARK_WEIGHT,
+            shapeKind: (SHAPE_KINDS as readonly string[]).includes(saved.shapeKind)
+              ? saved.shapeKind
+              : "rect",
             fontSize: saved.fontSize ?? 16,
             fillShapes: saved.fillShapes ?? false,
             fillOpacity: saved.fillOpacity ?? 0.35,
@@ -377,6 +513,38 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       set({ strokeWidth: w });
       save();
     },
+    setShapeKind: (k) => {
+      set({ shapeKind: k });
+      // Convert a selected shape rather than only arming the next one. The two annotations carry
+      // identical fields, so this is a change of tag and nothing else — and it is what the
+      // picker looks like it should do when a shape is selected in front of you.
+      const { selectedId, byFile } = get();
+      if (selectedId) {
+        for (const [file, list] of Object.entries(byFile)) {
+          const a = list.find((x) => x.id === selectedId);
+          // Converting between a closed shape and an open one would leave fill fields on
+          // something that cannot be filled, or take them off something that can, so the picker
+          // only converts within a family.
+          if (a && isShapeAnno(a) && isClosedShape(a.type) === isClosedShape(k))
+            get().update(file, selectedId, { type: k } as Partial<Annotation>);
+        }
+      }
+      save();
+    },
+    setMarkWeight: (w) => {
+      set({ markWeight: w });
+      // Retune a selected mark live, the way the colour swatch recolours one: the slider is the
+      // only control it has, so it has to act on the thing that is selected.
+      const { selectedId, byFile } = get();
+      if (selectedId) {
+        for (const [file, list] of Object.entries(byFile)) {
+          const a = list.find((x) => x.id === selectedId);
+          if (a && (a.type === "underline" || a.type === "strikeout" || a.type === "squiggly"))
+            get().update(file, selectedId, { weight: w } as Partial<Annotation>);
+        }
+      }
+      save();
+    },
     setFontSize: (s) => {
       set({ fontSize: s });
       // Resize the selected text box too, so the control edits the box you're looking at.
@@ -397,7 +565,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       if (selectedId) {
         for (const [file, list] of Object.entries(byFile)) {
           const a = list.find((x) => x.id === selectedId);
-          if (a && (a.type === "rect" || a.type === "ellipse"))
+          if (a && isShapeAnno(a) && isClosedShape(a.type))
             get().update(file, selectedId, { filled: v } as Partial<Annotation>);
         }
       }
@@ -409,7 +577,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       if (selectedId) {
         for (const [file, list] of Object.entries(byFile)) {
           const a = list.find((x) => x.id === selectedId);
-          if (a && (a.type === "rect" || a.type === "ellipse"))
+          if (a && isShapeAnno(a) && isClosedShape(a.type))
             get().update(file, selectedId, { fillOpacity: v } as Partial<Annotation>);
         }
       }
@@ -446,8 +614,27 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       const stamped = { ...anno, updatedAt: Date.now() } as Annotation;
       set((st) => ({
         byFile: { ...st.byFile, [file]: [...(st.byFile[file] ?? []), stamped] },
-        selectedId: anno.id,
-        optionsOpen: false, // the tool was just used — collapse its options pill
+        /*
+         * Adding something does not select it.
+         *
+         * It used to, and what that bought was a dashed box drawn around whatever you had just
+         * finished making — a rectangle around a freehand squiggle, a box around a shape you were
+         * looking at anyway — which is noise to be dismissed rather than information. For a text
+         * mark it was worse: the thickness slider retunes the selected mark, so a mark that
+         * selected itself turned the next drag of that slider into an edit of the last one rather
+         * than a setting for the next.
+         *
+         * The three places that genuinely need the new annotation selected — a text box and the
+         * edit tool, which hand straight over to a caret, and a signature, which shows its own
+         * handles — all call `setSelected` themselves immediately after this, and always did. So
+         * nothing here was load-bearing; in the edit tool's case it was actively wrong, selecting
+         * the white cover rectangle for the instant before the text box replaced it.
+         */
+        selectedId: st.selectedId,
+        // Collapse the options pill now the tool has been used — except for the text marks,
+        // where you almost always mark several passages in a row and reopening the pill between
+        // each one is the thing that makes the colour and thickness controls feel out of reach.
+        optionsOpen: isMarkupTool(st.tool),
       }));
       save();
     },

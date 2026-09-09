@@ -83,10 +83,10 @@ body {
   transform-origin: 0% 0%;
 }
 /*
- * Highlighting on a touch device runs our own selection instead of the WebView's, so the platform
- * one has to be switched off here — its drag handles and, the reason for all this, its magnifier,
- * which the OS pins under the finger and no web page can move. Scoped to the tool: every other
- * tool keeps native selection, and with it long-press copy.
+ * Selecting text on a touch device runs our own selection instead of the WebView's, so the
+ * platform one has to be switched off here — its drag handles and, the reason for all this, its
+ * magnifier, which the OS pins under the finger and no web page can move. Scoped to the two tools
+ * that select text; every other tool keeps native selection, and with it long-press copy.
  */
 .textLayer.bode-nonative,
 .textLayer.bode-nonative span {
@@ -94,6 +94,9 @@ body {
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
+  /* TextSelectLayer sits below this layer and hit-tests the spans by geometry, so they must not
+     swallow the pointer on the way down. */
+  pointer-events: none;
 }
 
 /* Opaque pastels — the multiply above supplies the transparency these used to fake with alpha. */
@@ -107,6 +110,20 @@ body {
 }
 .textLayer .bode-highlight.current {
   background: #ffb877;
+}
+
+/* ---- The start screen's primary action ----
+   A tinted accent glow rather than a flat drop shadow, so the button reads as lit rather than as
+   a layer sitting on the page, and it tracks the theme because the tint is mixed from --accent.
+   From `sm` up only: on a phone the button is one of three things on screen and needs no help
+   being found, and the phone start screen is deliberately left exactly as it was. */
+@media (min-width: 640px) {
+  .open-cta {
+    box-shadow: 0 10px 30px -10px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+  .open-cta:hover {
+    box-shadow: 0 16px 38px -10px color-mix(in srgb, var(--accent) 75%, transparent);
+  }
 }
 
 /* ---- Colour inputs ----

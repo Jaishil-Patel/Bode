@@ -84,6 +84,43 @@ export const IconCursor = (p: P) =>
 // Highlighter: a chisel-tip marker drawing a highlighted swipe.
 export const IconHighlight = (p: P) =>
   svg(<><path d="m9 11-6 6v3h9l3-3" /><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" /></>, p.className);
+// The three text marks: a letterform over the line that marks it. The "A" is drawn as a plain
+// stroke pair rather than real text so the icons stay geometry, like everything else here.
+const LETTER = <path d="M8 13 11.5 5 15 13M9 11h5" />;
+export const IconUnderline = (p: P) =>
+  svg(<>{LETTER}<path d="M6 18h12" /></>, p.className);
+export const IconStrikeout = (p: P) =>
+  svg(<>{LETTER}<path d="M5 11h14" /></>, p.className);
+export const IconSquiggly = (p: P) =>
+  svg(
+    <>
+      {LETTER}
+      <path d="M6 18q1.5-2 3 0t3 0 3 0 3 0" />
+    </>,
+    p.className,
+  );
+// Pin: a frame with a corner lifted, for pinning a region of the page beside what you are reading.
+export const IconPin = (p: P) =>
+  svg(
+    <>
+      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h9A1.5 1.5 0 0 1 16 5.5v9A1.5 1.5 0 0 1 14.5 16h-9A1.5 1.5 0 0 1 4 14.5z" />
+      <path d="M11 20h7a2 2 0 0 0 2-2v-7" />
+    </>,
+    p.className,
+  );
+export const IconTriangle = (p: P) => svg(<path d="M12 4 21 20H3z" />, p.className);
+export const IconLine = (p: P) => svg(<path d="M4 20 20 4" />, p.className);
+export const IconArrow = (p: P) =>
+  svg(<><path d="M4 20 20 4" /><path d="M20 10V4h-6" /></>, p.className);
+// Shapes: a square and a circle overlapping, for the one tool that draws either.
+export const IconShapes = (p: P) =>
+  svg(
+    <>
+      <rect x="3" y="3" width="12" height="12" rx="1.5" />
+      <circle cx="15.5" cy="15.5" r="5.5" />
+    </>,
+    p.className,
+  );
 // Text box: a "T" inside a frame.
 export const IconText = (p: P) =>
   svg(<><rect x="2.5" y="3.5" width="19" height="17" rx="1.5" /><path d="M7.5 8.5h9" /><path d="M12 8.5V16" /></>, p.className);
@@ -108,8 +145,22 @@ export const IconTrash = (p: P) =>
 // Edit text: lines of text with an I-beam caret (modifying existing text).
 export const IconEdit = (p: P) =>
   svg(<><path d="M3 5.5h10" /><path d="M3 12h7" /><path d="M3 18.5h10" /><path d="M19 5v14" /><path d="M17 5h4" /><path d="M17 19h4" /></>, p.className);
+/*
+ * Signature: a cursive stroke on a ruled line.
+ *
+ * The old one was a symmetric wave, which reads as a chart rather than as handwriting — and once
+ * the squiggly-underline tool arrived it was competing with that icon too. What makes a mark look
+ * written is that it is *not* regular: an ascender with an enclosed loop to open it, then
+ * undulations that shrink as they run out, ending short of the line.
+ */
 export const IconSignature = (p: P) =>
-  svg(<><path d="M3 17c2 0 3-7 5-7s1 5 3 5 2-8 4-8 2 6 4 6" /><path d="M3 21h18" /></>, p.className);
+  svg(
+    <>
+      <path d="M3 16.5c2.4.4 3.9-1.6 4.2-4.6.3-2.3-.1-3.9-1.1-3.9-1 0-1.4 2-.6 4.4.9 2.7 2.3 4.6 3.8 4.6 1 0 1.4-1.3 2.2-1.3.9 0 1 1.3 2 1.3 1.1 0 1.6-1.7 2.5-1.7.8 0 1 1.1 1.9 1.1" />
+      <path d="M3 20h18" />
+    </>,
+    p.className,
+  );
 // Fill in a form: a sheet with two answered blanks and a ticked box.
 export const IconForm = (p: P) =>
   svg(

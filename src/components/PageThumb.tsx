@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { INVERT_FILTER, usePageInverted } from "../settings/usePageColors";
 import { useViewer } from "../store/viewerStore";
 
 /**
@@ -21,6 +22,7 @@ export default function PageThumb({
   const baseSize = useViewer((s) => s.baseSize);
   const ref = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const inverted = usePageInverted();
   const [seen, setSeen] = useState(false);
   const aspect = baseSize.height / baseSize.width;
 
@@ -68,10 +70,16 @@ export default function PageThumb({
   return (
     <div
       ref={ref}
-      className={`overflow-hidden rounded bg-white ${className ?? ""}`}
-      style={{ width, height: width * aspect }}
+      className={`overflow-hidden rounded ${className ?? ""}`}
+      style={{ width, height: width * aspect, background: inverted ? "#0d0d0d" : "#fff" }}
     >
-      <canvas ref={canvasRef} className="block h-full w-full" />
+      {/* A CSS filter is safe here, unlike on the page itself: nothing blends against a
+          thumbnail, so there is no backdrop for a stacking context to disturb. */}
+      <canvas
+        ref={canvasRef}
+        className="block h-full w-full"
+        style={{ filter: inverted ? INVERT_FILTER : undefined }}
+      />
     </div>
   );
 }

@@ -3,8 +3,13 @@ import { createPortal } from "react-dom";
 import {
   useAnnotations,
   newId,
+  DEFAULT_MARK_WEIGHT,
   HIGHLIGHT_OPACITY,
+  isClosedShape,
+  isMarkupTool,
+  isRectsAnno,
   type Annotation,
+  type MarkupAnno,
   type HighlightAnno,
   type PenAnno,
   type RectAnno,
@@ -18,10 +23,14 @@ import { isTouchPrimary } from "../platform/device";
 import { useSettings } from "../settings/useSettings";
 import TextSelectLayer from "./TextSelectLayer";
 import { useTextSelection } from "./useTextSelection";
+import { usePortals } from "../portals/usePortals";
 import { pageGeom, rangeRects } from "../pdf/textGeometry";
 
 const EMPTY: Annotation[] = [];
 const EMPTY_RECTS: Rect[] = [];
+/** The pin tool's marquee colour. A literal, because a draft carries a colour and this one is
+ *  never the user's — it marks a region rather than drawing anything. */
+const PIN_MARQUEE = "#3b82f6";
 
 // Highlight height as a fraction of the selection's line box. A hair under 1 so stacked lines get
 // a faint separation instead of fusing into one block, while still reading as the full selection.
@@ -69,6 +78,50 @@ const inBox = (px: number, py: number, x: number, y: number, w: number, h: numbe
 
 // Screen-space rects for one highlight (one per selected line). Shared by the visual layer and the
 // invisible hit proxy so the thing you see and the thing you can grab can never drift apart.
+/** Stroke weight for a text mark, proportional to the line it marks. */
+const markWeight = (lineHeight: number, mult = 1) => Math.max(0.25, lineHeight * 0.075 * mult);
+
+/*
+ * Where a mark sits inside the line box, as a fraction of its height.
+ *
+ * A selection rectangle spans the whole line box — the top of the ascenders to the bottom of the
+ * descenders — so the baseline is not its middle. It sits around 0.8 down, which is why splitting
+ * the box in half puts a strikethrough above the middle of the letters rather than through them,
+ * and why an underline placed inside the box rides up into them.
+ */
+const UNDERLINE_Y = 1.02; // just clear of the descenders
+const STRIKE_Y = 0.66; // through the middle of the x-height, not of the box
+
+/**
+ * A wave along a line, for the squiggle. Alternating quadratic humps rather than a sine path:
+ * two control points per period is the cheapest thing that still reads as a wave at any zoom.
+ */
+function squigglePath(x0: number, x1: number, y: number, amp: number): string {
+  const step = Math.max(2, amp * 2.4);
+  let d = `M ${x0} ${y}`;
+  let up = true;
+  for (let x = x0; x < x1 - 0.01; x += step) {
+    const nx = Math.min(x + step, x1);
+    d += ` Q ${(x + nx) / 2} ${y + (up ? -amp : amp)} ${nx} ${y}`;
+    up = !up;
+  }
+  return d;
+}
+
+/** A triangle's three corners from its box: apex centred on top, base along the bottom. */
+const trianglePoints = (x: number, y: number, w: number, h: number, scale: number) =>
+  `${(x + w / 2) * scale},${y * scale} ${x * scale},${(y + h) * scale} ${(x + w) * scale},${(y + h) * scale}`;
+
+/** The two barbs of an arrowhead at (x2,y2), coming from (x1,y1). In page space. */
+function arrowHead(x1: number, y1: number, x2: number, y2: number, size: number) {
+  const ang = Math.atan2(y2 - y1, x2 - x1);
+  const spread = Math.PI / 7;
+  return [
+    { x: x2 - size * Math.cos(ang - spread), y: y2 - size * Math.sin(ang - spread) },
+    { x: x2 - size * Math.cos(ang + spread), y: y2 - size * Math.sin(ang + spread) },
+  ];
+}
+
 const highlightRects = (a: HighlightAnno, scale: number) =>
   a.rects.map((r) => ({
     x: r.x * scale,
@@ -82,9 +135,18 @@ function eraserHits(a: Annotation, px: number, py: number, tol: number): boolean
   switch (a.type) {
     case "rect":
     case "ellipse":
+    case "triangle":
     case "signature":
       return inBox(px, py, a.x, a.y, a.w, a.h, tol);
+    // Open shapes are a stroke, so the hit is against the segment rather than its bounding box —
+    // otherwise a diagonal arrow would erase from anywhere in the large empty square around it.
+    case "line":
+    case "arrow":
+      return pointSegDist(px, py, a.x, a.y, a.x + a.w, a.y + a.h) <= a.strokeWidth / 2 + tol;
     case "highlight":
+    case "underline":
+    case "strikeout":
+    case "squiggly":
       return a.rects.some((r) => inBox(px, py, r.x, r.y, r.w, r.h, tol));
     case "text": {
       const lines = a.text.split("\n").length || 1;
@@ -130,9 +192,10 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   const fillOpacity = useAnnotations((s) => s.fillOpacity);
   const signatureDataUrl = useAnnotations((s) => s.signatureDataUrl);
   const signatureAspect = useSignatureAspect(signatureDataUrl);
-  const highlightPresets = useAnnotations((a) => a.highlightPresets);
-  const activePreset = useAnnotations((a) => a.activePreset);
-  const setActivePreset = useAnnotations((a) => a.setActivePreset);
+  // Subscribed rather than read through activeColor(): this one is a prop, so it has to re-render
+  // the loupe when the preset changes. The commit path still calls activeColor() for the value
+  // that is live at the moment the mark lands.
+  const highlightColor = useAnnotations((a) => a.highlightPresets[a.activePreset]);
   const { add, update, remove, setSelected, setEditingId, setTool, activeColor } =
     useAnnotations.getState();
 
@@ -159,6 +222,8 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   // Kept in the store so the form layer can hand a newly filled blank straight to the caret.
   const editingId = useAnnotations((s) => s.editingId);
   // The page container (our own parent), used as the portal target for the highlight layer.
+  const shapeKind = useAnnotations((s) => s.shapeKind);
+  const openPortal = usePortals((s) => s.open);
   const [pageEl, setPageEl] = useState<HTMLElement | null>(null);
   useEffect(() => setPageEl(ref.current?.parentElement ?? null), []);
 
@@ -173,10 +238,10 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   // stays click-through to let the text layer receive the selection/click.
   const captureTool =
     tool === "text" ||
-    tool === "rect" ||
-    tool === "ellipse" ||
+    tool === "shape" ||
     tool === "pen" ||
     tool === "signature" ||
+    tool === "pin" ||
     tool === "eraser";
 
   const toPdf = (e: React.PointerEvent) => {
@@ -240,19 +305,27 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         dataUrl: signatureDataUrl as string,
       });
     } else {
+      // The pin marquee borrows the rectangle draft but never the rectangle tool's appearance:
+      // it is a region being chosen, not a shape being drawn, so it stays a thin outline in the
+      // accent colour whatever the shape settings happen to be.
+      const marquee = tool === "pin";
+      const kind = marquee ? "rect" : shapeKind;
       setDraft({
         id,
         pageIndex,
-        type: tool as "rect" | "ellipse",
-        color,
-        strokeWidth,
-        filled: fillShapes,
-        fillOpacity,
+        // The pin marquee is always a rectangle; a real shape is whichever the picker is on.
+        type: kind,
+        color: marquee ? PIN_MARQUEE : color,
+        strokeWidth: marquee ? 1 : strokeWidth,
+        // Fill belongs to the closed shapes only — a line has no inside to fill.
+        ...(isClosedShape(kind)
+          ? { filled: marquee ? false : fillShapes, fillOpacity }
+          : null),
         x: p.x,
         y: p.y,
         w: 0,
         h: 0,
-      });
+      } as Annotation);
     }
   };
 
@@ -271,11 +344,31 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
    * mouseup to commit on.
    */
   const customSelect = isTouchPrimary();
+  /** The two tools that select text. Both replace the platform selection on a touch device. */
+  const selectsText = isMarkupTool(tool) || tool === "select";
 
-  const commitRects = (rects: Rect[], color: string) => {
-    if (!rects.length) return;
-    add(docKey, { id: newId(), pageIndex, type: "highlight", color, rects: rects.map(insetLine) });
-    useTextSelection.getState().clear();
+  const commitRects = (rects: Rect[]) => {
+    if (!rects.length || !isMarkupTool(tool)) return;
+    add(docKey, {
+      id: newId(),
+      pageIndex,
+      // The tool decides which of the four marks this is; the rectangles are the same either way.
+      type: tool as MarkupAnno["type"] | "highlight",
+      color: activeColor(),
+      /*
+       * Read at the moment of the commit, not captured with the component.
+       *
+       * The desktop path commits from a `mouseup` listener whose effect does not depend on this
+       * value, so a subscribed copy would be whatever it was when the tool was picked — setting
+       * the thickness and *then* marking did nothing, and the only slider that appeared to work
+       * was the one retuning a mark already made. `activeColor()` is read live for the same
+       * reason, which is why the colour never had this problem.
+       */
+      ...(tool === "highlight" ? null : { weight: useAnnotations.getState().markWeight }),
+      // Only a highlight is inset. A line is drawn *at* an edge of the line box rather than
+      // filling it, so trimming the box would lift an underline into the glyphs above it.
+      rects: tool === "highlight" ? rects.map(insetLine) : rects,
+    } as Annotation);
   };
 
   /*
@@ -286,14 +379,15 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
    */
   const liveSel = useTextSelection((s) => s.sel);
   const previewRects = useMemo(() => {
-    if (!customSelect || !liveSel || liveSel.pageIndex !== pageIndex || !pageEl) return EMPTY_RECTS;
+    if (!customSelect || !selectsText || !liveSel || liveSel.pageIndex !== pageIndex || !pageEl)
+      return EMPTY_RECTS;
     const layer = pageEl.querySelector<HTMLElement>(".textLayer");
     if (!layer) return EMPTY_RECTS;
     return rangeRects(pageGeom(layer, scale), liveSel.anchor, liveSel.focus);
-  }, [customSelect, liveSel, pageIndex, pageEl, scale]);
+  }, [customSelect, selectsText, liveSel, pageIndex, pageEl, scale]);
 
   useEffect(() => {
-    if (tool !== "highlight" || customSelect) return;
+    if (!isMarkupTool(tool) || customSelect) return;
     const commit = () => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
@@ -308,18 +402,18 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
           if (cx < pageRect.left || cx > pageRect.right || cy < pageRect.top || cy > pageRect.bottom)
             continue;
           if (r.width < 1 || r.height < 1) continue;
-          rects.push(
-            insetLine({
-              x: (r.left - pageRect.left) / scale,
-              y: (r.top - pageRect.top) / scale,
-              w: r.width / scale,
-              h: r.height / scale,
-            }),
-          );
+          // Raw line boxes: `commitRects` decides what to do with them, and it is the only
+          // place that decides, so the two selection paths cannot drift apart.
+          rects.push({
+            x: (r.left - pageRect.left) / scale,
+            y: (r.top - pageRect.top) / scale,
+            w: r.width / scale,
+            h: r.height / scale,
+          });
         }
       }
       if (rects.length) {
-        add(docKey,{ id: newId(), pageIndex, type: "highlight", color: activeColor(), rects });
+        commitRects(rects);
         sel.removeAllRanges();
       }
     };
@@ -404,6 +498,9 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         fitWidth: w,
         scaleX,
       });
+      // One of the two places the tool does have to change: `setEditingId` puts a caret in the
+      // box, and a caret only survives in select mode — the effect above clears it otherwise.
+      // Staying on the edit tool would also make the next tap white out another word.
       setTool("select");
       setSelected(id);
       setEditingId(id);
@@ -423,12 +520,15 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       setDraft({ ...draft, points: [...(draft as PenAnno).points, p] });
     } else if (start.current) {
       const s = start.current;
+      // A line or an arrow keeps the drag's own start and end, signs included: normalising the
+      // box the way the closed shapes do would point every arrow down and to the right.
+      const directional = draft.type === "line" || draft.type === "arrow";
       setDraft({
         ...draft,
-        x: Math.min(s.x, p.x),
-        y: Math.min(s.y, p.y),
-        w: Math.abs(p.x - s.x),
-        h: Math.abs(p.y - s.y),
+        x: directional ? s.x : Math.min(s.x, p.x),
+        y: directional ? s.y : Math.min(s.y, p.y),
+        w: directional ? p.x - s.x : Math.abs(p.x - s.x),
+        h: directional ? p.y - s.y : Math.abs(p.y - s.y),
       } as Annotation);
     }
   };
@@ -456,6 +556,8 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
           }
         : { ...t, w: 180, h: undefined };
       add(docKey,anno);
+      // As with the edit tool: the box is handed straight to the caret, and typing needs select
+      // mode. Every other tool now stays picked until you pick another one.
       setTool("select");
       setSelected(anno.id);
       setEditingId(anno.id); // ready to type immediately
@@ -469,7 +571,6 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       // signature the box that was drawn, scaled to fill it without distorting the writing.
       const box = sig.w >= 5 ? sig : { x: sig.x, y: sig.y, w: SIGNATURE_CLICK_WIDTH, h: 0 };
       add(docKey, { ...sig, ...fitInside(box, signatureAspect) });
-      setTool("select");
       setSelected(sig.id);
       setDraft(null);
       start.current = null;
@@ -478,7 +579,33 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     const ok =
       draft.type === "pen"
         ? (draft as PenAnno).points.length > 1
-        : (draft as { w: number; h: number }).w > 2 || (draft as { h: number }).h > 2;
+        : // Magnitude, not sign: a line dragged up-left has negative w and h and is still a line.
+          Math.abs((draft as { w: number }).w) > 2 || Math.abs((draft as { h: number }).h) > 2;
+
+    /*
+     * The pin tool borrows the rectangle drag but does not keep the rectangle: the box describes
+     * a region to lift out of the page, and the result is a floating pane rather than anything
+     * written into the document. It opens beside the region it came from, not on top of it.
+     */
+    if (tool === "pin") {
+      const box = draft as unknown as { x: number; y: number; w: number; h: number };
+      if (ok && box.w > 8 && box.h > 8) {
+        const pr = ref.current?.getBoundingClientRect();
+        openPortal(
+          docKey,
+          pageIndex,
+          { x: box.x, y: box.y, w: box.w, h: box.h },
+          {
+            x: (pr?.left ?? 0) + (box.x + box.w) * scale + 16,
+            y: (pr?.top ?? 0) + box.y * scale,
+          },
+        );
+      }
+      setDraft(null);
+      start.current = null;
+      return;
+    }
+
     if (ok) add(docKey,draft);
     setDraft(null);
     start.current = null;
@@ -576,7 +703,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   const translate = (a: Annotation, dx: number, dy: number) => {
     if (a.type === "pen") {
       update(docKey,a.id, { points: a.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) });
-    } else if (a.type === "highlight") {
+    } else if (isRectsAnno(a)) {
       update(docKey,a.id, {
         rects: a.rects.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy })),
       });
@@ -614,7 +741,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     if (!drag || drag.id !== a.id) return a;
     if (a.type === "pen")
       return { ...a, points: a.points.map((p) => ({ x: p.x + drag.dx, y: p.y + drag.dy })) };
-    if (a.type === "highlight")
+    if (isRectsAnno(a))
       return { ...a, rects: a.rects.map((r) => ({ ...r, x: r.x + drag.dx, y: r.y + drag.dy })) };
     return { ...a, x: a.x + drag.dx, y: a.y + drag.dy } as Annotation;
   };
@@ -665,6 +792,25 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       style: { pointerEvents: annoPE as React.CSSProperties["pointerEvents"], cursor: "move" },
       onPointerDown: (e: React.PointerEvent) => !isDraft && startMove(e, a),
     };
+    if (a.type === "underline" || a.type === "strikeout" || a.type === "squiggly") {
+      const m = a as MarkupAnno;
+      return (
+        <g key={key} {...common} opacity={selected ? 0.7 : 1}>
+          {m.rects.map((r, i) => {
+            const x0 = r.x * scale;
+            const x1 = (r.x + r.w) * scale;
+            const w = markWeight(r.h, m.weight ?? DEFAULT_MARK_WEIGHT) * scale;
+            const y = (r.y + r.h * (m.type === "strikeout" ? STRIKE_Y : UNDERLINE_Y)) * scale;
+            const stroke = { stroke: m.color, strokeWidth: w, strokeLinecap: "round" as const };
+            return m.type === "squiggly" ? (
+              <path key={i} d={squigglePath(x0, x1, y, r.h * 0.11 * scale)} fill="none" {...stroke} />
+            ) : (
+              <line key={i} x1={x0} y1={y} x2={x1} y2={y} {...stroke} />
+            );
+          })}
+        </g>
+      );
+    }
     if (a.type === "highlight") {
       // Invisible stand-in. The visible highlight is painted by `highlightLayer` below, which sits
       // under .textLayer so it can blend against the page canvas — too low to ever be clicked,
@@ -697,6 +843,55 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
           strokeWidth={a.strokeWidth * scale}
           {...common}
         />
+      );
+    }
+    if (a.type === "triangle") {
+      return (
+        <polygon
+          key={key}
+          points={trianglePoints(a.x, a.y, a.w, a.h, scale)}
+          fill={a.filled ? a.color : "none"}
+          fillOpacity={a.filled ? a.fillOpacity : 0}
+          stroke={a.color}
+          strokeWidth={a.strokeWidth * scale}
+          strokeLinejoin="round"
+          {...common}
+        />
+      );
+    }
+    if (a.type === "line" || a.type === "arrow") {
+      // Drawn from the drag's own start and end, which is why these two do not normalise their
+      // box: the direction is the shape.
+      const x1 = a.x * scale;
+      const y1 = a.y * scale;
+      const x2 = (a.x + a.w) * scale;
+      const y2 = (a.y + a.h) * scale;
+      const head =
+        a.type === "arrow"
+          ? arrowHead(a.x, a.y, a.x + a.w, a.y + a.h, Math.max(6, a.strokeWidth * 4))
+          : null;
+      return (
+        <g key={key} {...common} opacity={selected ? 0.85 : 1}>
+          <line
+            x1={x1}
+            y1={y1}
+            x2={x2}
+            y2={y2}
+            stroke={a.color}
+            strokeWidth={a.strokeWidth * scale}
+            strokeLinecap="round"
+          />
+          {head && (
+            <polyline
+              points={`${head[0].x * scale},${head[0].y * scale} ${x2},${y2} ${head[1].x * scale},${head[1].y * scale}`}
+              fill="none"
+              stroke={a.color}
+              strokeWidth={a.strokeWidth * scale}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
+        </g>
       );
     }
     if (a.type === "ellipse") {
@@ -734,8 +929,9 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
 
   const selBox = (() => {
     const base = pageAnnos.find((x) => x.id === selectedId);
-    // No selection outline for text/signature (they have their own) or highlights (clutter).
-    if (!base || base.type === "text" || base.type === "highlight" || base.type === "signature")
+    // No selection outline for text/signature (they have their own), or for anything drawn from
+    // a text selection — a dashed box round every marked line is clutter, not information.
+    if (!base || base.type === "text" || isRectsAnno(base) || base.type === "signature")
       return null;
     const a = withDrag(base); // includes any live drag offset
     let x: number, y: number, w: number, h: number;
@@ -746,7 +942,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       y = Math.min(...ys);
       w = Math.max(...xs) - x;
       h = Math.max(...ys) - y;
-    } else if (a.type === "highlight") {
+    } else if (isRectsAnno(a)) {
       const x0 = Math.min(...a.rects.map((r) => r.x));
       const y0 = Math.min(...a.rects.map((r) => r.y));
       const x1 = Math.max(...a.rects.map((r) => r.x + r.w));
@@ -755,6 +951,11 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       y = y0;
       w = x1 - x0;
       h = y1 - y0;
+    } else if (a.type === "line" || a.type === "arrow") {
+      x = Math.min(a.x, a.x + a.w);
+      y = Math.min(a.y, a.y + a.h);
+      w = Math.abs(a.w);
+      h = Math.abs(a.h);
     } else {
       ({ x, y, w, h } = a as RectAnno);
     }
@@ -787,15 +988,12 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         // On touch devices the WebView otherwise claims the gesture for scrolling after a few
         // pixels of movement, firing pointercancel and aborting it ("draws a small line then
         // stops"; dragging a placed signature/text box jumps around). Opt out of native panning
-        // so the full pointermove stream reaches us. This overlay is the common ancestor of every
-        // draggable child (shapes, signatures, text boxes) and the browser intersects touch-action
-        // down the ancestor chain, so it covers select-mode drags too.
-        //
-        // The highlight tool is the exception, and for the same reason: because the intersection
-        // runs down the chain, "none" here would also reach TextSelectLayer's surface and stop the
-        // page scrolling under a swipe. Nothing is draggable in that mode, so the gestures can go
-        // back to the WebView; the selection drag takes the ones it needs at the point it arms.
-        touchAction: tool === "highlight" && customSelect ? "pan-x pan-y pinch-zoom" : "none",
+        // so the full pointermove stream reaches us. Unconditional because this overlay is the
+        // common ancestor of every draggable child (shapes, signatures, text boxes) and the
+        // browser intersects touch-action down the ancestor chain, covering select-mode drags too.
+        // TextSelectLayer's surface is deliberately portalled outside this element so that
+        // intersection cannot reach it and stop a swipe from scrolling the page.
+        touchAction: "none",
         // The eraser gets a real eraser-shaped cursor (via .cursor-eraser); other drawing tools
         // use a crosshair. Leave cursor unset for the eraser so the class takes effect.
         cursor: tool === "eraser" ? undefined : captureTool ? "crosshair" : "default",
@@ -805,16 +1003,15 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
-      {tool === "highlight" && customSelect && (
+      {selectsText && customSelect && (
         <TextSelectLayer
+          mode={tool === "select" ? "select" : "mark"}
           pageIndex={pageIndex}
           scale={scale}
           width={width}
           height={height}
           pageEl={pageEl}
-          presets={highlightPresets}
-          activePreset={activePreset}
-          onPick={setActivePreset}
+          color={highlightColor}
           onCommit={commitRects}
         />
       )}

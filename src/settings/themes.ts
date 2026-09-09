@@ -34,6 +34,28 @@ export const DEFAULT_CUSTOM_THEME: CustomTheme = {
   accentFg: "#ffffff",
 };
 
+/**
+ * Whether a theme is a dark one, for the settings that follow the theme rather than being set.
+ *
+ * Built-ins are known by name. A custom theme is judged by the luminance of its background,
+ * because the user picked those colours and nothing else can say what they meant by them.
+ */
+export function isDarkTheme(theme: ThemeName, custom: CustomTheme): boolean {
+  if (theme === "custom") return luminanceOf(custom.bg) < 0.5;
+  return theme === "dark" || theme === "oled";
+}
+
+/** Perceived lightness of a `#rgb`/`#rrggbb` colour, 0..1. Falls back to dark on anything else. */
+function luminanceOf(hex: string): number {
+  const h = hex.trim().replace("#", "");
+  const full = h.length === 3 ? [...h].map((c) => c + c).join("") : h;
+  if (full.length !== 6) return 0;
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n)) return 0;
+  // Rec. 601 weights: cheap, and matching human sensitivity matters more here than accuracy.
+  return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+}
+
 /** Maps CustomTheme fields to the CSS variable names defined in themes.css. */
 const VAR_MAP: Record<keyof CustomTheme, string> = {
   bg: "--bg",

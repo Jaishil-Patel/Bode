@@ -244,8 +244,9 @@ export default function Toolbar({
       className="no-select flex min-h-12 items-center gap-0.5 border-b border-border bg-surface px-2 sm:gap-1"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
-      {/* The sidebar (thumbnails/outline) only applies to PDFs, so hide its toggle for text tabs. */}
-      {!isText && (
+      {/* The sidebar holds thumbnails and the outline, so it only means anything with a PDF open:
+          hidden for text tabs, and on the start screen, where there is nothing to put in it. */}
+      {doc && !isText && (
         <>
           <Btn title="Toggle sidebar (Ctrl+B)" onClick={toggleSidebar} active={layout.sidebarOpen}>
             <IconSidebar />

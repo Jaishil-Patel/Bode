@@ -42,6 +42,15 @@ export interface LayoutSettings {
   toolsHidden: Tool[];
   // Allow the Save button to write an unlocked (decrypted) copy of a password-protected PDF.
   removePasswordOnSave: boolean;
+  /**
+   * Whether the page itself is inverted for dark reading.
+   *
+   * A theme only ever restyled the app around the document, so a dark theme still put a sheet of
+   * white paper in the middle of the screen — the one place the reader is actually looking.
+   * "auto" ties this to the theme, which is what most people want and nobody wants to configure;
+   * the explicit settings are for anyone who disagrees in either direction.
+   */
+  pageColors: "normal" | "auto" | "inverted";
 }
 
 interface SettingsState {
@@ -106,6 +115,7 @@ const DEFAULT_LAYOUT: LayoutSettings = {
   toolOrder: DEFAULT_TOOL_ORDER,
   toolsHidden: [],
   removePasswordOnSave: false,
+  pageColors: "auto",
 };
 
 const STORE_FILE = "settings.json";

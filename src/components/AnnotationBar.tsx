@@ -3,11 +3,40 @@ import { createPortal } from "react-dom";
 import { create } from "zustand";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
-import { useAnnotations, type Tool } from "../annotations/useAnnotations";
+import {
+  isClosedShape,
+  isShapeAnno,
+  MARK_WEIGHT_MAX,
+  MARK_WEIGHT_MIN,
+  useAnnotations,
+  type ShapeKind,
+  type Tool,
+} from "../annotations/useAnnotations";
 import { barTools, menuTools, normalizeToolbar, type ToolDef } from "../annotations/tools";
-import { IconFill, IconTrash, IconChevronDown, IconGrip, IconMore, IconPen } from "./icons";
+import {
+  IconArrow,
+  IconCircle,
+  IconFill,
+  IconLine,
+  IconTrash,
+  IconChevronDown,
+  IconGrip,
+  IconMore,
+  IconPen,
+  IconSquare,
+  IconTriangle,
+} from "./icons";
 
 type Side = "bottom" | "top" | "left" | "right";
+
+/** The shape picker's contents, in the order it offers them. */
+const SHAPE_PICKER: { kind: ShapeKind; label: string; Icon: (p: { className?: string }) => JSX.Element }[] = [
+  { kind: "rect", label: "Rectangle", Icon: IconSquare },
+  { kind: "ellipse", label: "Ellipse", Icon: IconCircle },
+  { kind: "triangle", label: "Triangle", Icon: IconTriangle },
+  { kind: "line", label: "Line", Icon: IconLine },
+  { kind: "arrow", label: "Arrow", Icon: IconArrow },
+];
 
 // Subtle accent tint used for the active tool, theme-aware via color-mix.
 const ACTIVE_BG = "color-mix(in srgb, var(--accent) 22%, transparent)";
@@ -137,16 +166,20 @@ function ToolBtn({
   active,
   title,
   onClick,
+  toolId,
   children,
 }: {
   active: boolean;
   title: string;
   onClick: () => void;
+  /** Lets the options pill find this button in the DOM so it can line itself up with it. */
+  toolId?: string;
   children: React.ReactNode;
 }) {
   return (
     <button
       title={title}
+      data-tool={toolId}
       onClick={onClick}
       style={active ? { background: ACTIVE_BG } : undefined}
       className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
@@ -591,6 +624,8 @@ function ToolsBar({ open }: { open: boolean }) {
     tool,
     color,
     strokeWidth,
+    markWeight,
+    shapeKind,
     fontSize,
     fillShapes,
     fillOpacity,
@@ -602,6 +637,8 @@ function ToolsBar({ open }: { open: boolean }) {
     setTool,
     setColor,
     setStrokeWidth,
+    setMarkWeight,
+    setShapeKind,
     setFontSize,
     setFillShapes,
     setFillOpacity,
@@ -654,11 +691,40 @@ function ToolsBar({ open }: { open: boolean }) {
   const selectedAnno = docKey
     ? (byFile[docKey] ?? []).find((a) => a.id === selectedId)
     : undefined;
-  const selectedIsShape = selectedAnno?.type === "rect" || selectedAnno?.type === "ellipse";
+  const selectedIsShape = !!selectedAnno && isShapeAnno(selectedAnno);
+
+  /*
+   * Which button on the bar the options pill lines itself up with.
+   *
+   * Normally the active tool. But the pill also opens for a *selected* annotation, and the tool
+   * then is Select — which has no options of its own, so pointing the pill at it said nothing and
+   * looked like the pill had wandered off. Pointing it at the tool that made the thing instead
+   * keeps the line between the controls and what they change.
+   */
+  const anchorTool: Tool =
+    tool !== "select" || !selectedAnno
+      ? tool
+      : isShapeAnno(selectedAnno)
+        ? "shape"
+        : (selectedAnno.type as Tool);
   const selectedText = selectedAnno?.type === "text" ? selectedAnno : undefined;
   const penContext = tool === "pen" || selectedAnno?.type === "pen";
-  const shapeContext = tool === "rect" || tool === "ellipse" || selectedIsShape;
+  const shapeContext = tool === "shape" || selectedIsShape;
+  // A line and an arrow have no inside, so the fill toggle and its opacity are hidden for them
+  // rather than shown doing nothing.
+  const fillable = isClosedShape(
+    selectedIsShape && selectedAnno ? (selectedAnno.type as ShapeKind) : shapeKind,
+  );
   const textContext = tool === "text" || !!selectedText;
+  // Underline, strike and squiggle draw a line in the pen colour, so they want the swatch — but
+  // not the thickness slider: the weight is taken from the height of the text being marked.
+  const markContext =
+    tool === "underline" ||
+    tool === "strikeout" ||
+    tool === "squiggly" ||
+    selectedAnno?.type === "underline" ||
+    selectedAnno?.type === "strikeout" ||
+    selectedAnno?.type === "squiggly";
   // Show the selected box's own size when one is selected, otherwise the tool default.
   const effectiveFontSize = selectedText ? selectedText.fontSize : fontSize;
 
@@ -757,12 +823,64 @@ function ToolsBar({ open }: { open: boolean }) {
     </>
   );
 
+  /*
+   * Colour and weight for the text marks.
+   *
+   * A separate slider from the pen's, and a different quantity: this one is a multiplier on a
+   * weight already derived from the size of the text being marked, so "thicker" stays in
+   * proportion whether it is a heading or a footnote being underlined.
+   */
+  const markControls = (
+    <>
+      {colorSwatch}
+      {slider({
+        min: MARK_WEIGHT_MIN * 100,
+        max: MARK_WEIGHT_MAX * 100,
+        value: Math.round(markWeight * 100),
+        onChange: (v) => setMarkWeight(v / 100),
+        title: "Line thickness",
+        lenClass: "w-16",
+        boxClass: "h-16",
+        val: ((markWeight - MARK_WEIGHT_MIN) / (MARK_WEIGHT_MAX - MARK_WEIGHT_MIN)) * 100,
+      })}
+    </>
+  );
+
   // Colour swatch + typeable font-size field for text boxes (active text tool or selected box).
   const fontControls = (
     <>
       {colorSwatch}
       <FontSizeField value={effectiveFontSize} onChange={setFontSize} min={4} max={200} vertical={vertical} />
     </>
+  );
+
+  /*
+   * Which shape the shape tool draws.
+   *
+   * Square and ellipse used to be two tools taking two slots on a bar the user has to budget. As
+   * a pair of buttons in the options they cost one slot between them, leave room for a third
+   * shape later, and put the choice next to the colour and thickness it is drawn with. With a
+   * shape selected the picker converts it, since the two carry identical fields.
+   */
+  const shapePicker = (
+    <div className={`flex shrink-0 gap-0.5 ${vertical ? "flex-col" : ""}`}>
+      {SHAPE_PICKER.map((o) => {
+        const on = shapeKind === o.kind;
+        return (
+          <button
+            key={o.kind}
+            title={o.label}
+            onClick={() => setShapeKind(o.kind)}
+            style={on ? { background: ACTIVE_BG } : undefined}
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
+              on ? "text-accent" : "text-muted hover:bg-white/10"
+            }`}
+          >
+            <o.Icon className="h-4 w-4" />
+          </button>
+        );
+      })}
+    </div>
   );
 
   // Fill toggle + opacity, shown only in the shape context.
@@ -812,21 +930,61 @@ function ToolsBar({ open }: { open: boolean }) {
   // The tool-options pill (colour/thickness/fill) floats just off the bar's page-facing side. It
   // shows when a drawing tool is freshly picked (or a shape/pen is selected) and collapses once
   // the tool is used — keeping the bar itself a fixed size.
-  const showPill = optionsOpen && (penContext || shapeContext || textContext);
+  const showPill = optionsOpen && (penContext || shapeContext || textContext || markContext);
+  /*
+   * Line the options pill up with the tool it belongs to.
+   *
+   * Centred on the bar, the pill said "some tool has options" and left you to work out which. The
+   * bar can hold a dozen buttons and be reordered arbitrarily, so the answer was rarely nearby.
+   * Offsetting it to the active button's centre makes the colour you are about to draw with sit
+   * directly off the tool you picked.
+   *
+   * Measured rather than computed: the bar scrolls when it is longer than the screen, tools can
+   * carry extra controls beside them (the highlighter's presets), and either would defeat any
+   * arithmetic over button widths.
+   */
+  const barRef = useRef<HTMLDivElement>(null);
+  const [pillOffset, setPillOffset] = useState(0);
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (!bar || !showPill) return;
+    const btn = bar.querySelector<HTMLElement>(`[data-tool="${anchorTool}"]`);
+    if (!btn) {
+      setPillOffset(0);
+      return;
+    }
+    const b = bar.getBoundingClientRect();
+    const t = btn.getBoundingClientRect();
+    // Clamped to the bar so the pill can never be dragged off past its own ends by a tool that
+    // has been scrolled to the edge.
+    const raw = vertical
+      ? t.top + t.height / 2 - (b.top + b.height / 2)
+      : t.left + t.width / 2 - (b.left + b.width / 2);
+    const limit = (vertical ? b.height : b.width) / 2;
+    setPillOffset(Math.max(-limit, Math.min(limit, raw)));
+  }, [showPill, anchorTool, side, vertical, shownTools.length, markContext, penContext, shapeContext, textContext]);
+
   const pillFirst = side === "bottom" || side === "right"; // order so the pill sits toward the page
   const optionsPill = showPill ? (
     <div
       className={`no-select ${pe} flex items-center gap-2 ${glass} ${
         vertical ? "flex-col px-2 py-3" : "px-3 py-1.5"
       }`}
-      style={surfaceBg}
+      style={{
+        ...surfaceBg,
+        transform: vertical ? `translateY(${pillOffset}px)` : `translateX(${pillOffset}px)`,
+        transition: "transform 160ms ease-out",
+      }}
     >
-      {textContext ? (
+      {markContext ? (
+        markControls
+      ) : textContext ? (
         fontControls
       ) : (
         <>
+          {shapeContext && shapePicker}
           {colorThickness}
-          {shapeContext && fillControls}
+          {shapeContext && fillable && fillControls}
         </>
       )}
     </div>
@@ -847,7 +1005,7 @@ function ToolsBar({ open }: { open: boolean }) {
           className={`flex items-center gap-2 ${vertical ? "flex-row" : "flex-col"} ${collapseCls(open)}`}
         >
         {pillFirst && optionsPill}
-        <div className={`${containerCls} ${pe}`} style={surfaceBg}>
+        <div ref={barRef} className={`${containerCls} ${pe}`} style={surfaceBg}>
         <button
           title="Minimise · keep holding to drag the tools to another edge"
           onPointerDown={startDrag}
@@ -876,7 +1034,12 @@ function ToolsBar({ open }: { open: boolean }) {
         */}
         {shownTools.map((t) => (
           <Fragment key={t.id}>
-            <ToolBtn active={tool === t.id} title={t.title} onClick={() => activate(t.id)}>
+            <ToolBtn
+              active={tool === t.id}
+              title={t.title}
+              onClick={() => activate(t.id)}
+              toolId={t.id}
+            >
               <t.Icon />
             </ToolBtn>
             {/* The highlighter's presets belong to it and travel with it when it is reordered. */}

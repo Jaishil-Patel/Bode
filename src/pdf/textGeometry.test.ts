@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  allOf,
   boundsOf,
   caretRect,
   hitTest,
@@ -223,6 +224,19 @@ describe("wordAt", () => {
       { span: 0, ch: 0 },
       { span: 0, ch: 7 },
     ]);
+  });
+});
+
+describe("allOf", () => {
+  it("runs from the first character to the last", () => {
+    expect(allOf(geom())).toEqual([
+      { span: 0, ch: 0 },
+      { span: 2, ch: 6 },
+    ]);
+  });
+
+  it("is null for a page with no text", () => {
+    expect(allOf({ scale: 1, spans: [], lines: [], first: null })).toBeNull();
   });
 });
 

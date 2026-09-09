@@ -1,17 +1,22 @@
 /*
- * Our own text selection for the highlight tool on touch devices.
+ * Our own text selection on touch devices, for the two tools that select text.
  *
  * The platform's selection is what draws the magnifier that sits under the thumb, and the OS owns
  * where that goes — so the only way to move it was to stop using the platform's selection here.
- * This replaces it: long-press to take a word, drag either handle to adjust, then commit from the
- * pill. See `pdf/textGeometry.ts` for the character maths and `SelectionLoupe` for the magnifier.
+ * Long-press takes the word under the finger and dragging extends it, in both modes; what happens
+ * when you let go is what differs:
  *
- * Only mounted when the highlight tool is active on a touch device; everywhere else, and for every
- * other tool, native selection is untouched.
+ *   highlight — the mark lands immediately. Choosing a colour is something you do beforehand, on
+ *               the bar, so there is nothing left to confirm and no reason to interrupt the
+ *               gesture with a prompt.
+ *   select    — the selection stays up with an actions pill: copy it, or take the whole page.
+ *
+ * See `pdf/textGeometry.ts` for the character maths and `SelectionLoupe` for the magnifier.
  */
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  allOf,
   boundsOf,
   caretRect,
   hitTest,
@@ -36,29 +41,30 @@ const MOVE_SLOP = 10;
 const EDGE = 80;
 const EDGE_SPEED = 12; // px per frame at the very edge
 
+/** What letting go of a selection does. */
+export type SelectMode = "mark" | "select";
+
 interface Props {
+  mode: SelectMode;
   pageIndex: number;
   scale: number;
   width: number;
   height: number;
   /** The page container, whose `.textLayer` child carries the spans. */
   pageEl: HTMLElement | null;
-  /** Colours offered on the confirm pill; tapping one commits in that colour. */
-  presets: string[];
-  activePreset: number;
-  onPick: (index: number) => void;
-  onCommit: (rects: Rect[], color: string) => void;
+  /** The colour the mark will land in, previewed in the loupe's tint. */
+  color: string;
+  onCommit: (rects: Rect[]) => void;
 }
 
 export default function TextSelectLayer({
+  mode,
   pageIndex,
   scale,
   width,
   height,
   pageEl,
-  presets,
-  activePreset,
-  onPick,
+  color,
   onCommit,
 }: Props) {
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -134,16 +140,43 @@ export default function TextSelectLayer({
       loupeRef.current?.aim(ev.clientX, ev.clientY);
       updateEdge(ev.clientY);
     };
-    const finish = () => {
+    /*
+     * Letting go. In mark mode this is the commit — the selection you are looking at when you
+     * lift is the mark you get, and the selection is then done with. In select mode the selection
+     * survives instead, because the pill's actions are the point of having made it.
+     *
+     * The rects are recomputed from the store rather than closed over, since `onMove` has been
+     * moving the selection ever since this closure was made.
+     */
+    const finish = (commit: boolean) => {
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", finish);
-      window.removeEventListener("pointercancel", finish);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
       stopEdge();
-      useTextSelection.getState().setDragging(null);
+      const store = useTextSelection.getState();
+      const s = store.sel;
+      const layer = textLayer();
+      // A cancelled pointer is the system taking the gesture away rather than a deliberate
+      // release, so it drops the selection instead of acting on it.
+      if (!commit) {
+        store.clear();
+        return;
+      }
+      if (mode === "select") {
+        store.setDragging(null);
+        return;
+      }
+      if (s && s.pageIndex === pageIndex && layer) {
+        const marked = rangeRects(pageGeom(layer, scale), s.anchor, s.focus);
+        if (marked.length) onCommit(marked);
+      }
+      store.clear();
     };
+    const onUp = () => finish(true);
+    const onCancel = () => finish(false);
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", finish);
-    window.addEventListener("pointercancel", finish);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   };
 
   /*
@@ -180,7 +213,10 @@ export default function TextSelectLayer({
     if (Math.abs(e.clientX - s.x) > MOVE_SLOP || Math.abs(e.clientY - s.y) > MOVE_SLOP) cancelArm();
   };
 
-  /** A tap that never armed and never travelled dismisses whatever is selected. */
+  /**
+   * A tap that never armed and never travelled puts the selection away. Only reachable in select
+   * mode, since a highlight clears its own selection the moment it lands.
+   */
   const onPointerUp = (e: React.PointerEvent) => {
     const s = startPt.current;
     const tapped =
@@ -222,32 +258,44 @@ export default function TextSelectLayer({
     [pageIndex],
   );
 
+  /*
+   * The ends of the selection.
+   *
+   * Grabbable in select mode, where the selection outlives the gesture and adjusting it is worth
+   * doing. In highlight mode the mark lands on release and nothing survives to take hold of, so
+   * they are feedback only and stay out of the way of the next press.
+   */
+  const grabbable = mode === "select";
   const handle = (end: DragEnd, pos: CharPos) => {
     const layer = textLayer();
     const c = layer && caretRect(pageGeom(layer, scale), pos);
     if (!c) return null;
-    // The start handle hangs above the line and the end handle below, so neither sits on the
-    // character it marks — the same shape the platform's handles use, for the same reason.
+    // The start marker sits above the line and the end marker below, so neither covers the
+    // character it points at.
     const top = end === "anchor" ? c.y * scale : (c.y + c.h) * scale;
+    const dot = grabbable ? 14 : 12;
     return (
       <div
         key={end}
-        onPointerDown={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          e.currentTarget.setPointerCapture?.(e.pointerId);
-          beginDrag(end, e.clientX, e.clientY);
-        }}
+        onPointerDown={
+          grabbable
+            ? (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                beginDrag(end, e.clientX, e.clientY);
+              }
+            : undefined
+        }
         style={{
           position: "absolute",
           left: c.x * scale,
           top,
-          width: 28,
-          height: 28,
-          marginLeft: -14,
-          marginTop: end === "anchor" ? -28 : 0,
+          width: grabbable ? 28 : dot,
+          height: grabbable ? 28 : dot,
+          marginLeft: grabbable ? -14 : -6,
+          marginTop: end === "anchor" ? (grabbable ? -28 : -12) : 0,
           touchAction: "none",
-          pointerEvents: "auto",
+          pointerEvents: grabbable ? "auto" : "none",
           display: "flex",
           alignItems: end === "anchor" ? "flex-end" : "flex-start",
           justifyContent: "center",
@@ -255,8 +303,8 @@ export default function TextSelectLayer({
       >
         <div
           style={{
-            width: 14,
-            height: 14,
+            width: dot,
+            height: dot,
             borderRadius: "50%",
             background: "var(--accent)",
             boxShadow: "0 1px 3px rgb(0 0 0 / 0.35)",
@@ -266,77 +314,88 @@ export default function TextSelectLayer({
     );
   };
 
-  // ---- The confirm pill ----
-  // Committing on handle release is what the old 450ms settle timer effectively did, and its
-  // failure mode was landing the mark before you had finished adjusting. An explicit tap is the
-  // fix, and it doubles as the colour choice, so picking a colour costs no extra step.
-  const bounds = boundsOf(rects);
+  /*
+   * The actions pill, select mode only.
+   *
+   * Text actions and nothing else: choosing a highlight colour used to live here, and having to
+   * answer a colour prompt before a highlight would land is exactly what made highlighting feel
+   * like a form to fill in. That is the gesture's job now, and this is left to do what a text
+   * selection is actually for.
+   */
+  const bounds = mode === "select" ? boundsOf(rects) : null;
   const pill =
     mine && !dragging && bounds && pageEl
       ? (() => {
           const r = pageEl.getBoundingClientRect();
-          const below = r.top + (bounds.y + bounds.h) * scale + 10;
-          const flip = below > window.innerHeight - 80;
+          const below = r.top + (bounds.y + bounds.h) * scale + 12;
+          // Flip above the selection when there is no room under it, so it never sits off-screen.
+          const flip = below > window.innerHeight - 72;
+          const layer = textLayer();
+          const act = (fn: () => void) => (e: React.PointerEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            fn();
+          };
+          const btn = {
+            padding: "6px 10px",
+            fontSize: 13,
+            color: "var(--text)",
+            whiteSpace: "nowrap" as const,
+          };
           return createPortal(
             <div
               style={{
                 position: "fixed",
                 left: Math.min(
-                  Math.max(r.left + (bounds.x + bounds.w / 2) * scale, 90),
-                  window.innerWidth - 90,
+                  Math.max(r.left + (bounds.x + bounds.w / 2) * scale, 100),
+                  window.innerWidth - 100,
                 ),
                 top: flip ? undefined : below,
-                bottom: flip ? window.innerHeight - (r.top + bounds.y * scale) + 10 : undefined,
+                bottom: flip ? window.innerHeight - (r.top + bounds.y * scale) + 12 : undefined,
                 transform: "translateX(-50%)",
                 zIndex: 55,
                 display: "flex",
                 alignItems: "center",
-                gap: 8,
-                padding: "6px 10px",
+                gap: 2,
+                padding: 4,
                 borderRadius: 999,
                 background: "var(--surface)",
                 border: "1px solid var(--border)",
                 boxShadow: "0 6px 20px rgb(0 0 0 / 0.3)",
               }}
             >
-              {presets.map((c, i) => (
-                <button
-                  key={i}
-                  title={`Highlight in colour ${i + 1}`}
-                  onClick={() => {
-                    onPick(i);
-                    onCommit(rects, c);
-                  }}
-                  style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: "50%",
-                    background: c,
-                    border:
-                      i === activePreset ? "2px solid var(--accent)" : "2px solid rgb(255 255 255 / 0.3)",
-                  }}
-                />
-              ))}
-              <span style={{ width: 1, height: 18, background: "var(--border)" }} />
               <button
-                title="Copy text"
-                onClick={() => {
-                  const layer = textLayer();
+                style={btn}
+                onPointerDown={act(() => {
                   if (!layer) return;
                   const [a, b] = order(mine.anchor, mine.focus);
                   navigator.clipboard?.writeText(rangeText(pageGeom(layer, scale), a, b));
                   useTextSelection.getState().clear();
-                }}
-                style={{ padding: "0 6px", fontSize: 12, color: "var(--text)" }}
+                })}
               >
                 Copy
               </button>
+              <span style={{ width: 1, height: 18, background: "var(--border)" }} />
               <button
-                title="Cancel"
-                onClick={() => useTextSelection.getState().clear()}
-                style={{ padding: "0 6px", fontSize: 12, color: "var(--muted)" }}
+                style={btn}
+                onPointerDown={act(() => {
+                  if (!layer) return;
+                  const whole = allOf(pageGeom(layer, scale));
+                  if (whole) {
+                    useTextSelection
+                      .getState()
+                      .setSel({ pageIndex, anchor: whole[0], focus: whole[1] });
+                  }
+                })}
               >
-                Cancel
+                Select all
+              </button>
+              <span style={{ width: 1, height: 18, background: "var(--border)" }} />
+              <button
+                style={{ ...btn, color: "var(--muted)" }}
+                onPointerDown={act(() => useTextSelection.getState().clear())}
+              >
+                Done
               </button>
             </div>,
             document.body,
@@ -344,30 +403,51 @@ export default function TextSelectLayer({
         })()
       : null;
 
+  /*
+   * Portalled into the page rather than rendered inside the annotation overlay, and sitting below
+   * it at z-index 2.
+   *
+   * Two reasons, both about not stealing gestures in select mode. The overlay sets
+   * `touch-action: none` so a half-drawn shape is not cut short by the page scrolling, and the
+   * browser intersects that down the whole ancestor chain — inside it, this surface could never
+   * let a swipe scroll. And the overlay is where draggable annotations live, so anything above it
+   * would take the taps meant for them. Under it, they get first refusal and this catches the rest.
+   *
+   * z-index 1 specifically: it has to stay under the link and form layers at 2 as well, or a tap
+   * on a link would land here instead of following it. That leaves it below the text layer too,
+   * which is why `.bode-nonative` makes that layer non-interactive — with our own selection the
+   * spans are hit-tested geometrically and never need to receive a pointer event.
+   */
+  const surface = pageEl
+    ? createPortal(
+        <div
+          ref={surfaceRef}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={cancelArm}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width,
+            height,
+            zIndex: 1,
+            // A plain swipe still scrolls and two fingers still pinch; only an armed drag takes
+            // the gesture, and it does that through the non-passive listener above.
+            touchAction: "pan-x pan-y pinch-zoom",
+            pointerEvents: "auto",
+          }}
+        >
+          {mine && handle("anchor", order(mine.anchor, mine.focus)[0])}
+          {mine && handle("focus", order(mine.anchor, mine.focus)[1])}
+        </div>,
+        pageEl,
+      )
+    : null;
+
   return (
     <>
-      <div
-        ref={surfaceRef}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={cancelArm}
-        style={{
-          position: "absolute",
-          inset: 0,
-          width,
-          height,
-          zIndex: 4,
-          // A plain swipe still scrolls and two fingers still pinch; only an armed drag takes
-          // the gesture, and it does that through the non-passive listener above.
-          touchAction: "pan-x pan-y pinch-zoom",
-          // The handles re-enable pointer events for themselves.
-          pointerEvents: "auto",
-        }}
-      >
-        {mine && handle("anchor", order(mine.anchor, mine.focus)[0])}
-        {mine && handle("focus", order(mine.anchor, mine.focus)[1])}
-      </div>
+      {surface}
       {pill}
       {phone && dragging && mine && (
         <SelectionLoupe
@@ -375,7 +455,7 @@ export default function TextSelectLayer({
           pageNumber={pageIndex + 1}
           rects={rects}
           scale={scale}
-          color={presets[activePreset] ?? "#fff59d"}
+          color={color}
         />
       )}
     </>

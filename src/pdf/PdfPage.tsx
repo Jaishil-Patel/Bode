@@ -2,8 +2,9 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { pdfjs, type PdfDocument } from "./pdfWorker";
 import type { SearchMatch } from "./search";
 import { useViewer } from "../store/viewerStore";
-import { useAnnotations } from "../annotations/useAnnotations";
+import { isMarkupTool, useAnnotations } from "../annotations/useAnnotations";
 import { isTouchPrimary } from "../platform/device";
+import { INVERT_FILTER, usePageInverted } from "../settings/usePageColors";
 import AnnotationLayer from "../annotations/AnnotationLayer";
 import LinkLayer from "./LinkLayer";
 import FormLayer from "./FormLayer";
@@ -109,10 +110,12 @@ export default function PdfPage({
   const paintedScale = useRef(0);
   const textScale = useRef(0);
   const filePath = useViewer((s) => s.filePath);
-  // With the highlight tool on a touch device we run our own selection, so the platform's is
-  // switched off (see .bode-nonative). Deliberately NOT a dependency of the render effect — it
-  // is a class on an existing node, and rebuilding the text layer for it would be wasteful.
-  const customSelect = useAnnotations((a) => a.tool === "highlight") && isTouchPrimary();
+  // The two text-selecting tools run our own selection on a touch device, so the platform's is
+  // switched off for them (see .bode-nonative). Deliberately NOT a dependency of the render
+  // effect — it is a class on an existing node, and rebuilding the text layer for it is waste.
+  const customSelect =
+    useAnnotations((a) => isMarkupTool(a.tool) || a.tool === "select") && isTouchPrimary();
+  const inverted = usePageInverted();
 
   // The current display geometry, so the async render below can size against where the zoom has
   // actually got to rather than against the scale it started at.
@@ -210,7 +213,18 @@ export default function PdfPage({
       // The one moment the visible canvas changes: resize and blit together, no blank frame.
       canvas.width = off.width;
       canvas.height = off.height;
+      /*
+       * Invert here, on the blit, rather than with a CSS filter on the element.
+       *
+       * A filter on the canvas would make it a stacking context, and the highlight layer beneath
+       * blends against this canvas as its backdrop — so filtering the element would change what
+       * that blend resolves against and quietly wreck every highlight on the page. Baking it into
+       * the bitmap leaves the compositing exactly as it was: the overlays still blend against a
+       * page, it is simply a dark one now.
+       */
+      ctx.filter = inverted ? INVERT_FILTER : "none";
       ctx.drawImage(off, 0, 0);
+      ctx.filter = "none";
       paintedScale.current = renderScale;
       // Display size comes from where the zoom is now, not from this render's viewport — they
       // differ whenever the scale moved while this render was in flight.
@@ -313,12 +327,20 @@ export default function PdfPage({
       cancelled = true;
       renderTask?.cancel();
     };
-  }, [doc, src, pageNumber, renderScale, visible, query, currentMatch]);
+  }, [doc, src, pageNumber, renderScale, visible, query, currentMatch, inverted]);
 
   return (
     <div
-      className="relative mx-auto bg-white"
-      style={{ width, height, boxShadow: "var(--page-shadow)", borderRadius: 2 }}
+      className="relative mx-auto"
+      style={{
+        width,
+        height,
+        boxShadow: "var(--page-shadow)",
+        borderRadius: 2,
+        // Shows through until the bitmap lands, and around it afterwards; white paper framing an
+        // inverted page is worse than no page at all.
+        background: inverted ? "#0d0d0d" : "#fff",
+      }}
       data-page={pageNumber}
     >
       {visible ? (

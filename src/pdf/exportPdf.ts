@@ -141,6 +141,47 @@ async function drawAnnotation(
       }
       break;
     }
+    /*
+     * Underline, strikethrough and squiggle.
+     *
+     * Drawn as line segments through `map.toUser`, the same route the pen takes, so a rotated
+     * page is handled once and correctly rather than a second time here. The weight and the
+     * vertical position inside the line box repeat what AnnotationLayer paints, so what is saved
+     * is what was on screen.
+     */
+    case "underline":
+    case "strikeout":
+    case "squiggly": {
+      for (const q of a.rects) {
+        // Repeats AnnotationLayer's geometry so what is saved is what was on screen.
+        const thickness = Math.max(0.25, q.h * 0.075 * (a.weight ?? 1));
+        const y = q.y + q.h * (a.type === "strikeout" ? 0.66 : 1.02);
+        if (a.type === "squiggly") {
+          const amp = q.h * 0.11;
+          const step = Math.max(2, amp * 2.4);
+          // Sampled into short segments: pdf-lib has no quadratic primitive on a line, and at
+          // this amplitude a polyline is indistinguishable from the curve it approximates.
+          let prev = map.toUser(q.x, y);
+          for (let x = q.x + step / 2; x < q.x + q.w + step / 2; x += step / 2) {
+            const cx = Math.min(x, q.x + q.w);
+            const phase = Math.round((cx - q.x) / (step / 2)) % 2 === 1;
+            const py = phase ? y - amp : y;
+            const pt = map.toUser(cx, py);
+            page.drawLine({ start: prev, end: pt, thickness, color: col(a.color), lineCap: 1 });
+            prev = pt;
+          }
+        } else {
+          page.drawLine({
+            start: map.toUser(q.x, y),
+            end: map.toUser(q.x + q.w, y),
+            thickness,
+            color: col(a.color),
+            lineCap: 1,
+          });
+        }
+      }
+      break;
+    }
     case "rect": {
       const u = map.rect(a.x, a.y, a.w, a.h);
       page.drawRectangle({
@@ -167,6 +208,58 @@ async function drawAnnotation(
         borderColor: col(a.color),
         borderWidth: a.strokeWidth,
       });
+      break;
+    }
+    /*
+     * Triangle, drawn through its own corners rather than a box.
+     *
+     * `drawSvgPath` takes a path in PDF user space with y already the right way up, so the three
+     * corners go through `map.toUser` individually — the same route the pen takes — and rotation
+     * is handled once, by the mapper, rather than a second time here.
+     */
+    case "triangle": {
+      const apex = map.toUser(a.x + a.w / 2, a.y);
+      const left = map.toUser(a.x, a.y + a.h);
+      const right = map.toUser(a.x + a.w, a.y + a.h);
+      page.drawSvgPath(
+        `M ${apex.x} ${apex.y} L ${left.x} ${left.y} L ${right.x} ${right.y} Z`,
+        {
+          // drawSvgPath measures from the top-left of the page, so an origin at the top undoes
+          // the flip the coordinates already carry.
+          x: 0,
+          y: page.getSize().height,
+          color: a.filled ? col(a.color) : undefined,
+          opacity: a.filled ? a.fillOpacity : undefined,
+          borderColor: col(a.color),
+          borderWidth: a.strokeWidth,
+          borderLineCap: 1,
+        },
+      );
+      break;
+    }
+    case "line":
+    case "arrow": {
+      const from = map.toUser(a.x, a.y);
+      const to = map.toUser(a.x + a.w, a.y + a.h);
+      page.drawLine({ start: from, end: to, thickness: a.strokeWidth, color: col(a.color), lineCap: 1 });
+      if (a.type === "arrow") {
+        // The head is built in page space and mapped like everything else, so it stays attached
+        // to the tip whatever rotation the page carries.
+        const size = Math.max(6, a.strokeWidth * 4);
+        const ang = Math.atan2(a.h, a.w);
+        const spread = Math.PI / 7;
+        for (const s of [-spread, spread]) {
+          const bx = a.x + a.w - size * Math.cos(ang + s);
+          const by = a.y + a.h - size * Math.sin(ang + s);
+          page.drawLine({
+            start: map.toUser(bx, by),
+            end: to,
+            thickness: a.strokeWidth,
+            color: col(a.color),
+            lineCap: 1,
+          });
+        }
+      }
       break;
     }
     case "pen": {

@@ -10,6 +10,7 @@ import { useFormValues } from "./forms/useFormValues";
 import Toolbar from "./components/Toolbar";
 import TabBar from "./components/TabBar";
 import AnnotationTools from "./components/AnnotationBar";
+import PortalLayer from "./portals/PortalLayer";
 import Sidebar from "./components/Sidebar";
 import SearchBar from "./components/SearchBar";
 import CommandPalette from "./components/CommandPalette";
@@ -96,50 +97,101 @@ function EmptyState() {
   const [showDevices, setShowDevices] = useState(false);
   // Android hands back content:// URIs whose read permission isn't kept after the app closes, so
   // a stored recent can't be reopened — hide the list there rather than show broken entries.
-  const showRecents = recents.length > 0 && !isAndroid();
+  const canRecents = !isAndroid();
+  const hasRecents = recents.length > 0;
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-6 p-8">
-      <div className="text-center">
-        <h1 className="text-3xl font-semibold text-text">Bode</h1>
-        <p className="mt-1 text-sm text-muted">A calm, fast reader for PDF, Markdown &amp; HTML.</p>
-      </div>
-      <button
-        onClick={openWithDialog}
-        className="flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 font-medium text-accent-fg transition-opacity hover:opacity-90"
+    /*
+     * Scrolls on the outside, centres on the inside.
+     *
+     * The content is short enough to sit in the middle of the window right up until the devices
+     * panel is opened, at which point it is taller than the window — and a centred flex column
+     * that overflows spills past BOTH ends, so the bottom of the panel was unreachable. Centring
+     * against `min-h-full` keeps the short case looking the same and lets the tall case grow into
+     * a scroll instead of off the screen.
+     */
+    <div className="h-full overflow-y-auto">
+      {/*
+       * One column on a phone, two from `sm` up.
+       *
+       * A grid rather than a pair of flex columns, so the DOM order stays exactly the phone order
+       * — title, button, recents, devices — and each piece is *placed* into a cell rather than
+       * moved. Two flex columns would have meant nesting Devices alongside the button, which on a
+       * narrow window would push it above Recent and quietly change the phone layout. Every
+       * two-column rule here is `sm:`-prefixed for the same reason.
+       */}
+      <div
+        className={`flex min-h-full flex-col items-center justify-center gap-6 p-8 ${
+          canRecents
+            ? "sm:mx-auto sm:grid sm:max-w-5xl sm:grid-cols-2 sm:content-center sm:items-start sm:gap-x-16 sm:gap-y-7 sm:p-12 lg:max-w-6xl lg:gap-x-20"
+            : ""
+        }`}
       >
-        <IconOpen /> Open a document
-      </button>
-      {showRecents && (
-        <div className="w-full max-w-sm">
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Recent</h2>
-          <div className="flex flex-col gap-1">
-            {recents.slice(0, 8).map((r) => (
-              <button
-                key={r.path}
-                onClick={() => openPath(r.path)}
-                title={r.path}
-                className="truncate rounded px-3 py-2 text-left text-sm text-text hover:bg-surface-2"
-              >
-                {r.name}
-              </button>
-            ))}
-          </div>
+        <div className="text-center sm:col-start-1 sm:row-start-1 sm:text-left">
+          <h1 className="text-3xl font-semibold text-text sm:text-5xl">Bode</h1>
+          <p className="mt-1 text-sm text-muted sm:mt-2 sm:text-base">
+            A calm, fast reader for PDF, Markdown &amp; HTML.
+          </p>
         </div>
-      )}
+        <button
+          onClick={openWithDialog}
+          className="open-cta flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 font-medium text-accent-fg transition-opacity hover:opacity-90 sm:col-start-1 sm:row-start-2 sm:justify-self-start sm:gap-3 sm:rounded-xl sm:px-7 sm:py-4 sm:text-base"
+        >
+          <IconOpen /> Open a document
+        </button>
 
-      {/* Opening this is what starts Nearby — nothing binds a port or generates a key until then. */}
-      <div className="w-full max-w-sm">
-        {showDevices ? (
-          <DevicesPanel />
-        ) : (
-          <button
-            onClick={() => setShowDevices(true)}
-            className="w-full rounded px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-text"
+        {/*
+         * Always present on desktop, even with nothing in it: an empty right-hand column with a
+         * line explaining itself is a better answer than a column that silently is not there.
+         * On a phone an empty list still collapses away exactly as it always did.
+         */}
+        {canRecents && (
+          <div
+            className={`w-full max-w-sm sm:col-start-2 sm:row-span-3 sm:row-start-1 sm:max-w-none sm:rounded-2xl sm:border sm:border-border sm:bg-surface sm:p-6 ${
+              hasRecents ? "" : "hidden sm:block"
+            }`}
           >
-            Devices on my network…
-          </button>
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted sm:mb-3 sm:text-sm">
+              Recent
+            </h2>
+            {hasRecents ? (
+              <div className="flex flex-col gap-1">
+                {/* Twelve on desktop, where the column has the room for them; the phone keeps
+                    the eight it showed before, since its layout has not changed. */}
+                {recents.slice(0, 12).map((r, i) => (
+                  <button
+                    key={r.path}
+                    onClick={() => openPath(r.path)}
+                    title={r.path}
+                    className={`truncate rounded px-3 py-2 text-left text-sm text-text hover:bg-surface-2 sm:rounded-lg sm:px-3.5 sm:py-2.5 sm:text-base ${
+                      i >= 8 ? "hidden sm:block" : ""
+                    }`}
+                  >
+                    {r.name}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="px-3 py-2 text-sm text-muted sm:text-base">
+                Documents you open will show up here.
+              </p>
+            )}
+          </div>
         )}
+
+        {/* Opening this is what starts Nearby — nothing binds a port or generates a key until then. */}
+        <div className="w-full max-w-sm sm:col-start-1 sm:row-start-3 sm:max-w-none">
+          {showDevices ? (
+            <DevicesPanel />
+          ) : (
+            <button
+              onClick={() => setShowDevices(true)}
+              className="w-full rounded px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-text sm:w-auto sm:px-3.5 sm:py-2.5 sm:text-base sm:text-left"
+            >
+              Devices on my network…
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -382,6 +434,10 @@ export default function App() {
       {/* The annotation tools stay: they already float over the page and collapse to a single pill,
           so they're not the kind of chrome fullscreen is meant to clear away. */}
       {doc && <AnnotationTools />}
+      {/* Pinned regions. Outside the viewer on purpose: a portal is anchored to the window, so
+          scrolling the document — or scrolling its own page out of the render window — must
+          neither move it nor take it away. */}
+      {doc && <PortalLayer />}
       {/* A phone has no F11 and no Escape, so it gets a button instead of advice about keys. */}
       {fullscreen && (isAndroid() ? <FullscreenExitButton /> : <FullscreenHint />)}
 
