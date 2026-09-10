@@ -306,7 +306,7 @@ export default function TextSelectLayer({
             width: dot,
             height: dot,
             borderRadius: "50%",
-            background: "var(--accent)",
+            background: "var(--accent-ink)",
             boxShadow: "0 1px 3px rgb(0 0 0 / 0.35)",
           }}
         />

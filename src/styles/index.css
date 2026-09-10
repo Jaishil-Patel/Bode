@@ -19,29 +19,70 @@ body {
   overflow: hidden;
 }
 
+/*
+ * Modal and drawer overlays stop short of the window caption.
+ *
+ * They used to be `inset-0`, which was right while the caption belonged to the OS and sat outside
+ * the webview entirely. It is ours now and inside the page, so a full-height overlay covers it —
+ * putting minimise, maximise and close behind a scrim whose only response to a click is to close
+ * the panel. --caption-h is set on the app root, and falls back to zero so an overlay rendered
+ * anywhere else still behaves.
+ */
+.below-caption {
+  top: var(--caption-h, 0px);
+}
+
 /* Disable text selection on chrome by default; the PDF text layer re-enables it. */
 .no-select {
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* Thin, themed scrollbars to keep the UI calm. */
+/*
+ * Scrollbars: the thumb, and nothing else.
+ *
+ * The lane still occupies its 10px of layout — a classic scrollbar always does, and there is no
+ * way to ask Chromium for an overlay one — but nothing in it paints, so what shows through is
+ * whatever the scroll container is sitting on. No housing, just a pill floating over the content.
+ *
+ * The background on ::-webkit-scrollbar is the whole point and is easy to miss: styling the track
+ * transparent does not cover it, because the track is a region *inside* the scrollbar and the
+ * scrollbar paints its own face underneath. Left unset, that face is Chromium's default light grey
+ * — and since nothing here declares `color-scheme`, it stays light grey in every theme, which is
+ * the pale strip that used to run the full height of the page under Glass and Dark alike.
+ *
+ * The buttons go for the same reason: on Windows they are the two square caps that made the lane
+ * read as a fixture rather than as a thumb.
+ */
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
+  background: transparent;
 }
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+*::-webkit-scrollbar-button {
+  display: none;
+}
+/*
+ * --muted rather than --border, because with the lane gone the thumb is no longer read against a
+ * panel — it is read against whatever it happens to be floating over, which for the document
+ * scroller is the page itself. --border is a hairline colour and under Glass it is white at 40%,
+ * which on a white page is nothing at all. --muted is a mid tone in every theme by definition, so
+ * it holds against a bright page and an inverted one alike; the mix keeps it feeling like glass
+ * rather than a painted-on bar.
+ */
 *::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
+  background: color-mix(in srgb, var(--muted) 85%, transparent);
   background-clip: content-box;
-}
-*::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 /* Opt-out for scroll containers (e.g. the floating tools bar) where a reserved scrollbar gutter

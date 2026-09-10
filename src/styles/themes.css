@@ -9,6 +9,19 @@
 
 :root {
   --font-ui: "Inter", "Segoe UI", system-ui, sans-serif;
+  /*
+   * The fill used by chrome that floats over the page — the annotation tools bar, and any panel
+   * that wants to sit at the same depth as it. A fraction of --surface rather than a colour of its
+   * own, so it follows every theme without being restated in any of them.
+   */
+  --glass-fill: color-mix(in srgb, var(--surface) 42%, transparent);
+  /*
+   * The accent, in the one role that cannot take a pale colour: small marks read against chrome —
+   * an active tool glyph, a selected page number, a selection handle on the page. Defaults to the
+   * accent itself, so a theme that never sets it behaves exactly as it always did. Only Glass
+   * pulls them apart, and only because its light variant has to.
+   */
+  --accent-ink: var(--accent);
   --page-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
   --radius: 8px;
 }
@@ -79,13 +92,32 @@
   --surface-2: rgba(17, 24, 39, 0.07);
   --border: rgba(255, 255, 255, 0.4);
   --text: #0f1218;
-  --muted: #59637a;
-  --accent: #0a84ff;
-  --accent-fg: #ffffff;
+  /* Deeper than a muted slate would normally go, because this one is not read against a surface —
+     it is read against whatever the gradient is doing behind a 7% fill. Over the blue stop the old
+     #59637a came to 4.27:1, under the floor for the small text --muted is mostly used for. */
+  --muted: #434b5e;
+  /*
+   * A pale blue, chosen against the real chrome.
+   *
+   * The accent is read two ways and one value cannot serve both. As a *fill* it is this colour, and
+   * dark text sits on it at 13.3:1. As a *marker* — a glyph or a hairline on pale chrome — it has
+   * to be dark enough to see, and this one is not: --accent-ink is the same colour walked towards
+   * black until a small mark clears 4.5:1 against the worst chrome in the theme, which costs it
+   * most of its chroma. That is not a slip; a pale blue and a legible mark on a pale ground are
+   * simply not the same colour, and pretending otherwise is what made every earlier attempt fail.
+   */
+  --accent: #d5e2fb;
+  --accent-ink: #575c66;
+  /* Dark, because this fill cannot carry white at all. */
+  --accent-fg: #0b1a33;
   --page-shadow: 0 10px 34px rgba(15, 23, 42, 0.16);
-  /* The native title bar cannot be translucent, so it gets an opaque stand-in for --surface:
-     roughly what the frosted chrome resolves to once it has composited over the backdrop. */
-  --titlebar: #eef2fa;
+  /*
+   * Only read when the window is decorated, which the desktop build no longer is — the caption is
+   * TitleBar.tsx now, and it needs no stand-in colour because it sits on the real gradient. Kept
+   * because a flat opaque value is the best a native caption can ever be given, and this is the
+   * measured one: the ground under the top 48px, through the frost, averaged across the width.
+   */
+  --titlebar: #dfe7ff;
 }
 
 /*
@@ -141,10 +173,18 @@
  * behind the panel's own translucent fill and its content while staying trapped inside the panel,
  * because that same backdrop-filter also makes the element a stacking context.
  *
- * The one place it cannot go is an element that is its own scroll container. An absolutely
- * positioned box inside a scroller is laid out against the padding box and then travels with the
- * content, so the layer would slide out from under a bar the moment that bar scrolled — leaving the
- * far end unrefracted. Those elements say so with `glass-flat` and keep the frost without it.
+ * Two kinds of element cannot take it, and both say so with `glass-flat`, keeping the frost without
+ * the bend.
+ *
+ * The first is an element that is its own scroll container. An absolutely positioned box inside a
+ * scroller is laid out against the padding box and then travels with the content, so the layer
+ * would slide out from under a bar the moment that bar scrolled — leaving the far end unrefracted.
+ *
+ * The second is an element too short to feed the displacement. The lens samples up to half of
+ * `scale` away — 45px, at the value set in GlassFilter — and its source is the panel's own backdrop,
+ * which stops at the panel's own box. A 560px settings drawer has depth to spare; a 48px toolbar
+ * does not, so most of what the bottom of the bar reaches for is simply not there, and the miss
+ * reads as banding along that edge. A bar that is wide and shallow gets flat glass.
  *
  * If scrolling a document under the bars ever feels heavy, this block is the thing to delete: the
  * theme degrades to plain frosted glass and nothing else changes.
@@ -166,11 +206,144 @@
    more weight here than they would in a theme that could rely on a solid background. Two rims
    rather than one: a bright top-left and a softer bottom-right read as a bevel catching a light
    from above, which is what gives the edge somewhere to refract towards. */
-[data-theme="glass"] .glass.border,
-[data-theme="glass"] .glass.border-b,
-[data-theme="glass"] .glass.border-r {
+[data-theme="glass"] .glass.border {
   box-shadow: inset 2px 2px 1px -1px rgba(255, 255, 255, 0.7),
     inset -1px -1px 1px 1px rgba(255, 255, 255, 0.45), 0 12px 40px rgba(15, 23, 42, 0.16);
+}
+
+/*
+ * A docked bar is not a floating panel and gets no bevel at all.
+ *
+ * A rim is how a floating panel shows you where it stops. A bar that spans the window has no such
+ * problem — it stops at the window — so every rim on it is a line drawn across the view for no
+ * reason, and against this theme's near-clear fill a white hairline is not subtle, it is the most
+ * definite thing on the bar. The border the markup asks for goes the same way and for the same
+ * reason: `--border` is white at 40% here, which is exactly the line it is meant to be too faint
+ * to be.
+ *
+ * What separates a docked bar from the document is then what should have been separating it all
+ * along — the frost, and the shadow it casts.
+ */
+[data-theme="glass"] .glass.border-b {
+  border-bottom-color: transparent;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.16);
+}
+[data-theme="glass"] .glass.border-r {
+  border-right-color: transparent;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.16);
+}
+
+/*
+ * A panel pitched just behind the floating tools bar.
+ *
+ * It started at the bar's own --glass-fill, which is the sheerest surface in the app — right for
+ * something you glance past, a touch thin for 560px of controls you are working in. This is that
+ * fill with a little more body: still unmistakably the same family, still showing the page moving
+ * behind it, just no longer the very lightest thing on screen.
+ *
+ * Written out rather than derived from --glass-fill because it is more than --surface, and
+ * color-mix can only take a fraction of it. A fill rather than a token change: --surface is shared
+ * with every button, input and well inside the drawer, and those still want to read as recesses in
+ * the panel, not as panels of their own.
+ */
+[data-theme="glass"] .glass.glass-sheer {
+  background-color: rgba(255, 255, 255, 0.42);
+}
+
+/*
+ * The dark variant veils downward, not upward.
+ *
+ * The white wash the light variant uses is not simply weaker here, it is the wrong direction: what
+ * makes a panel opaque is its alpha, and pushing a *white* alpha over a dark backdrop lifts the
+ * panel to mid grey while --muted stays the pale slate the dark glass gave it. The two converge —
+ * at the 0.28 this once was, muted text fell to 3.9:1, which is precisely as unreadable as the
+ * near-clear fill it was meant to fix, arrived at from the opposite side.
+ *
+ * A dark fill veils by the same mechanism and the same alpha, and leaves the panel where light
+ * text needs it. Muted reads about 10:1 against it, text about 16:1, and neither moves much with
+ * the fill, so this number is free to be chosen for how much it hides rather than for legibility.
+ */
+[data-theme="glass"][data-pages="inverted"] .glass.glass-sheer,
+[data-pages="inverted"] [data-theme="glass"] .glass.glass-sheer {
+  background-color: rgba(14, 17, 23, 0.55);
+}
+
+/*
+ * The marker half of the split.
+ *
+ * Tailwind's utilities are the seam: `text-accent` and `border-accent` are only ever the accent
+ * being used as a mark, and `bg-accent` is only ever it being used as a fill. Redirecting the two
+ * by class costs nothing at the call sites and leaves every fill on the colour it should be.
+ */
+[data-theme="glass"] .text-accent {
+  color: var(--accent-ink);
+}
+[data-theme="glass"] .border-accent {
+  border-color: var(--accent-ink);
+}
+
+/*
+ * Primary buttons, in glass rather than in paint.
+ *
+ * A solid accent slab is how you make a button unmissable in a theme built out of solid surfaces.
+ * In this one it is the only opaque object on the screen, which reads less as emphasis than as a
+ * control that forgot to join the rest of the app. Glass has its own way of saying "this is the
+ * thing to press", and it is the same one every panel here uses: a lit rim and a shadow under it.
+ *
+ * Written out rather than borrowed from `.glass.border`, because these buttons carry no `border`
+ * class and giving them one would put a hairline on them in all five other themes to buy a rule
+ * here. `:not(:disabled)` on the hover arms so a disabled button is not lit up by pointing at it —
+ * these rules out-specify the `disabled:opacity-40` the markup relies on.
+ *
+ * The hover rules have to be this specific: `.open-cta:hover` lives in index.css, which is
+ * imported after this file, so at equal specificity its accent glow would come back on the start
+ * screen's button the moment you pointed at it.
+ */
+[data-theme="glass"] .glass-cta {
+  background-color: rgba(255, 255, 255, 0.42);
+  color: var(--text);
+  box-shadow: inset 2px 2px 1px -1px rgba(255, 255, 255, 0.7),
+    inset -1px -1px 1px 1px rgba(255, 255, 255, 0.45), 0 12px 40px rgba(15, 23, 42, 0.16);
+  /* The markup only transitions opacity, which is the one property this theme does not change —
+     so the fill and the rims would have snapped. Geometry-free properties, so no spring: a colour
+     that overshoots travels past the value it is heading for and comes back as a flicker. */
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+/*
+ * Hover lights the glass rather than tinting it.
+ *
+ * `hover:opacity-90` was fading the button — which on an opaque slab reads as a press, and on a
+ * translucent one just makes it more see-through, the opposite of a response. Held at 1 here.
+ *
+ * The glow is a bloom the panel throws outward, plus a brighter top rim: the light that was
+ * already glancing off the bevel, turned up. Both are white rather than accent-tinted, so the
+ * button stops being the one place a colour is introduced.
+ */
+[data-theme="glass"] .glass-cta:hover:not(:disabled) {
+  opacity: 1;
+  background-color: rgba(255, 255, 255, 0.56);
+  box-shadow: inset 2px 2px 1px -1px rgba(255, 255, 255, 0.92),
+    inset -1px -1px 1px 1px rgba(255, 255, 255, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 0 22px 2px rgba(255, 255, 255, 0.55), 0 16px 44px rgba(15, 23, 42, 0.2);
+}
+
+/* Dark pages reach the start screen too — there is no document involved in the setting — so the
+   button veils downward here for the same reason the drawer does. */
+[data-theme="glass"][data-pages="inverted"] .glass-cta,
+[data-pages="inverted"] [data-theme="glass"] .glass-cta {
+  background-color: rgba(14, 17, 23, 0.55);
+  box-shadow: inset 2px 2px 1px -1px rgba(255, 255, 255, 0.3),
+    inset -1px -1px 1px 1px rgba(255, 255, 255, 0.14), 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+[data-theme="glass"][data-pages="inverted"] .glass-cta:hover:not(:disabled),
+[data-pages="inverted"] [data-theme="glass"] .glass-cta:hover:not(:disabled) {
+  opacity: 1;
+  background-color: rgba(14, 17, 23, 0.68);
+  /* A dimmer bloom, because it has a dark room to light rather than a bright one — the same
+     halo at the light variant's strength would read as a lamp rather than as lit glass. */
+  box-shadow: inset 2px 2px 1px -1px rgba(255, 255, 255, 0.5),
+    inset -1px -1px 1px 1px rgba(255, 255, 255, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 0 22px 2px rgba(255, 255, 255, 0.2), 0 16px 44px rgba(0, 0, 0, 0.55);
 }
 
 /*
@@ -196,4 +369,106 @@
  */
 [data-theme="glass"] .bg-black\/10 {
   background-color: rgba(255, 255, 255, 0.1);
+}
+
+/*
+ * ─── Glass, with the pages turned dark ───────────────────────────────────────────────────────
+ *
+ * Everything above assumes the backdrop is light. It has to: the panels have almost no fill, so
+ * what makes dark text legible on them is the lit ground showing through, and `brightness` in the
+ * frost lifting it the rest of the way.
+ *
+ * Invert the pages and that assumption is not merely strained, it is false. `brightness(1.05)` on
+ * a #0d0d0d page lifts it to #0e0e0e; the 7% white fill takes it to about #1f1f1f; and --muted,
+ * a mid slate picked to sit on white, lands on near-black at roughly 2:1. No amount of tuning the
+ * lift rescues that — to carry --muted the backdrop has to come back up to nearly the white it was,
+ * by which point the scrim is opaque and there is no glass left to speak of.
+ *
+ * So this does not lift the backdrop. It flips the glass: a light wash on dark instead of a dark
+ * wash on light, light text, a scrim that dims again like every other theme's, and a ground deep
+ * enough to put the two in the same room. The gradient keeps its exact geometry and only loses its
+ * lighting, so the composition a reader chose is still the composition they get.
+ *
+ * Selectors come in pairs throughout: one for <html>, which carries both attributes, and one for
+ * the settings panel's theme preview, which carries data-theme on a descendant of the <html> that
+ * carries data-pages. The preview should show the glass you are actually looking at.
+ */
+[data-theme="glass"][data-pages="inverted"],
+[data-pages="inverted"] [data-theme="glass"] {
+  --bg: #0e1117;
+  /* The mirror of the light variant: there, a dark wash on a lit ground; here, a light wash on a
+     dark one. Both are the same idea — the panel is a little nearer the light than what it covers. */
+  --surface: rgba(255, 255, 255, 0.085);
+  --surface-2: rgba(255, 255, 255, 0.14);
+  --border: rgba(255, 255, 255, 0.16);
+  --text: #eef1f7;
+  /* Lifted for the same reason its light counterpart is deepened, and measured against the same
+     worst case: the panel over the brightest stop of the ground, not the panel over the page. */
+  --muted: #bcc4d4;
+  /* The same colour serves both jobs on a dark ground — as a marker it reads 7.6:1 there without
+     any adjustment, so the ink is reset to the accent, undoing the light variant's override, which
+     would otherwise still be in force on this same element. */
+  --accent: #d5e2fb;
+  --accent-ink: var(--accent);
+  --accent-fg: #06121e;
+  --page-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  /* As above: decorated windows only. Same measurement against the darkened ground. */
+  --titlebar: #383e62;
+}
+
+/* Same four gradients, same positions and sizes, same order — only the light is different. Deep
+   pigments at lower alpha, because a pastel over #0e1117 goes grey rather than dim. */
+[data-theme="glass"][data-pages="inverted"] .bg-bg,
+[data-theme="glass"][data-pages="inverted"].bg-bg,
+[data-pages="inverted"] [data-theme="glass"] .bg-bg,
+[data-pages="inverted"] [data-theme="glass"].bg-bg {
+  background-image:
+    radial-gradient(58% 52% at 10% 6%, rgba(56, 96, 190, 0.4), transparent 70%),
+    radial-gradient(52% 48% at 90% 2%, rgba(104, 68, 170, 0.34), transparent 70%),
+    radial-gradient(66% 58% at 82% 98%, rgba(34, 122, 118, 0.3), transparent 72%),
+    radial-gradient(48% 44% at 22% 100%, rgba(150, 74, 96, 0.26), transparent 70%);
+}
+
+/* The brightness multiplier goes. Lifting towards white is what the light variant needs and the
+   one thing this one must not do — it would grey the page back out through every panel, which is
+   precisely what the reader turned dark pages on to avoid. The white fill above does the
+   separating instead, and saturate keeps the ground's colour from muddying under the blur. */
+[data-theme="glass"][data-pages="inverted"] .glass,
+[data-pages="inverted"] [data-theme="glass"] .glass {
+  backdrop-filter: blur(4.25px) saturate(150%);
+  -webkit-backdrop-filter: blur(4.25px) saturate(150%);
+}
+
+/* The bevel survives the flip intact — a bright rim reads as a caught light against dark glass at
+   least as well as against light, and with the fill this low it is still most of the panel's edge.
+   It only has to come down in strength, since the contrast it works against went up. */
+[data-theme="glass"][data-pages="inverted"] .glass.border,
+[data-pages="inverted"] [data-theme="glass"] .glass.border {
+  box-shadow: inset 2px 2px 1px -1px rgba(255, 255, 255, 0.3),
+    inset -1px -1px 1px 1px rgba(255, 255, 255, 0.14), 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+[data-theme="glass"][data-pages="inverted"] .glass.border-b,
+[data-pages="inverted"] [data-theme="glass"] .glass.border-b {
+  border-bottom-color: transparent;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+[data-theme="glass"][data-pages="inverted"] .glass.border-r,
+[data-pages="inverted"] [data-theme="glass"] .glass.border-r {
+  border-right-color: transparent;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* And the scrim dims again, like every other theme's. The reasoning that made it lighten is the
+   reasoning that makes it darken here: it moves the app behind a panel towards whatever colour
+   that panel needs under its text, and that colour is no longer white. */
+[data-theme="glass"][data-pages="inverted"] .bg-black\/40,
+[data-pages="inverted"] [data-theme="glass"] .bg-black\/40 {
+  background-color: rgba(0, 0, 0, 0.45);
+}
+
+/* The annotation bar's stepper well, back the right way up: a recess is darker than what holds it,
+   and on dark glass that is the original `bg-black/10` rather than the pale wash standing in for it. */
+[data-theme="glass"][data-pages="inverted"] .bg-black\/10,
+[data-pages="inverted"] [data-theme="glass"] .bg-black\/10 {
+  background-color: rgba(0, 0, 0, 0.22);
 }

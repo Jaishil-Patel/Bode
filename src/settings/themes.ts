@@ -92,8 +92,13 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
 }
 
-/** Tint the native (Windows) title bar to match the current theme's surface/text colours. */
-function updateNativeTitleBar(): void {
+/**
+ * Tint the native (Windows) title bar to match the current theme's surface/text colours.
+ *
+ * Exported because the theme is no longer the only thing that moves it: Glass reads a different
+ * --titlebar once the pages go dark, and that switch happens without any theme change at all.
+ */
+export function updateNativeTitleBar(): void {
   const cs = getComputedStyle(document.documentElement);
   // A theme whose surface is translucent (glass) cannot hand its colour to an opaque native bar,
   // so it names an opaque stand-in; every other theme leaves --titlebar unset and falls back here.

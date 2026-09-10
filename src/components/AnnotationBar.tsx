@@ -39,7 +39,7 @@ const SHAPE_PICKER: { kind: ShapeKind; label: string; Icon: (p: { className?: st
 ];
 
 // Subtle accent tint used for the active tool, theme-aware via color-mix.
-const ACTIVE_BG = "color-mix(in srgb, var(--accent) 22%, transparent)";
+const ACTIVE_BG = "color-mix(in srgb, var(--accent-ink) 22%, transparent)";
 
 /*
  * The highlighter palette.
@@ -499,7 +499,8 @@ const toolsPos = (side: Side): React.CSSProperties =>
  */
 const GLASS =
   "glass rounded-full border border-white/15 shadow-2xl ring-1 ring-black/5 backdrop-blur-2xl backdrop-saturate-150";
-const GLASS_BG = "color-mix(in srgb, var(--surface) 42%, transparent)";
+// Defined in themes.css, and shared with any panel that wants to sit at this same depth.
+const GLASS_BG = "var(--glass-fill)";
 
 /**
  * How long the bar takes to collapse into its button, or grow back out of it.

@@ -24,7 +24,16 @@ export default function SearchBar() {
   const pos = search.current >= 0 ? search.current + 1 : 0;
 
   return (
-    <div className="glass absolute right-4 top-3 z-30 flex items-center gap-1 rounded-lg border border-border bg-surface p-1.5 shadow-lg animate-fade-in">
+        /*
+     * Anchored to both edges on a phone, to the right edge alone once there is room.
+     *
+     * Pinned only to the right, the bar sized itself from its contents — a 224px input, the match
+     * counter, three buttons — and came to a little over 400px against a 360px screen, so it ran
+     * off the left edge and took the input's first characters with it. Below `sm` it spans instead
+     * and the input takes what is left; from `sm` up the fixed width comes back, because a search
+     * field that grows with the window is not what anyone wants on a desktop.
+     */
+    <div className="glass absolute left-2 right-2 top-3 z-30 flex items-center gap-1 rounded-lg border border-border bg-surface p-1.5 shadow-lg animate-fade-in sm:left-auto sm:right-4">
       <input
         ref={inputRef}
         value={value}
@@ -37,22 +46,22 @@ export default function SearchBar() {
           }
         }}
         placeholder="Find in document"
-        className="w-56 rounded bg-surface-2 px-2 py-1 text-sm text-text outline-none"
+        className="min-w-0 flex-1 rounded bg-surface-2 px-2 py-1 text-sm text-text outline-none sm:w-56 sm:flex-none"
       />
-      <span className="min-w-[64px] px-1 text-center text-xs text-muted">
+      <span className="min-w-[3rem] shrink-0 px-1 text-center text-xs text-muted sm:min-w-[64px]">
         {search.busy ? "…" : total ? `${pos} / ${total}` : value ? "0 / 0" : ""}
       </span>
       <button
         onClick={prevMatch}
         title="Previous (Shift+Enter)"
-        className="flex h-7 w-7 items-center justify-center rounded hover:bg-surface-2"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-surface-2"
       >
         <IconChevronUp />
       </button>
       <button
         onClick={nextMatch}
         title="Next (Enter)"
-        className="flex h-7 w-7 items-center justify-center rounded hover:bg-surface-2"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-surface-2"
       >
         <IconChevronDown />
       </button>
@@ -62,7 +71,7 @@ export default function SearchBar() {
           toggleSearch(false);
         }}
         title="Close (Esc)"
-        className="flex h-7 w-7 items-center justify-center rounded hover:bg-surface-2"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-surface-2"
       >
         <IconClose />
       </button>

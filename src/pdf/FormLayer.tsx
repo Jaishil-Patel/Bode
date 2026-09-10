@@ -59,8 +59,8 @@ const px = (rect: FieldRect, scale: number) => ({
 });
 
 /** Field chrome: enough tint to find the blanks at a glance, not enough to fight the page. */
-const FILLABLE_BG = "color-mix(in srgb, var(--accent) 9%, transparent)";
-const FILLABLE_BORDER = "color-mix(in srgb, var(--accent) 38%, transparent)";
+const FILLABLE_BG = "color-mix(in srgb, var(--accent-ink) 9%, transparent)";
+const FILLABLE_BORDER = "color-mix(in srgb, var(--accent-ink) 38%, transparent)";
 /** A required field nobody has answered yet. Amber reads on every theme, light or dark. */
 const REQUIRED_BORDER = "#f59e0b";
 

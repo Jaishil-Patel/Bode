@@ -35,7 +35,7 @@ export default function PasswordPrompt() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="below-caption fixed inset-x-0 bottom-0 z-50 flex items-center justify-center bg-black/40"
       onClick={cancelPassword}
     >
       <div
@@ -76,7 +76,7 @@ export default function PasswordPrompt() {
           <button
             onClick={submit}
             disabled={!value || busy}
-            className="rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="glass glass-cta rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             Open
           </button>

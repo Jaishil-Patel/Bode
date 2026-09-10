@@ -127,7 +127,7 @@ export default function CommandPalette({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]"
+      className="below-caption fixed inset-x-0 bottom-0 z-50 flex items-start justify-center bg-black/40 pt-[15vh]"
       onClick={onClose}
     >
       <div

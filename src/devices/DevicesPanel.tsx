@@ -40,7 +40,7 @@ export { Transfers } from "./Transfers";
  */
 export function DevicesDrawer({ onClose }: { onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
+    <div className="below-caption fixed inset-x-0 bottom-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
       <div
         className="glass drawer-inset flex h-full w-[380px] max-w-[92vw] flex-col bg-surface shadow-2xl animate-fade-in"
         onClick={(e) => e.stopPropagation()}
@@ -117,7 +117,7 @@ export function StaleBanner() {
             setUpdating(false);
           }
         }}
-        className="shrink-0 rounded-md bg-accent px-3 py-1 font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-40"
+        className="glass glass-cta shrink-0 rounded-md bg-accent px-3 py-1 font-medium text-accent-fg transition-opacity hover:opacity-90 disabled:opacity-40"
       >
         {updating ? "Updating…" : "Update"}
       </button>

@@ -25,6 +25,8 @@ export async function openInNewWindow(
       height: 800,
       minWidth: 640,
       minHeight: 480,
+      // Matches the main window: the caption is drawn by TitleBar, not by the OS.
+      decorations: false,
       backgroundColor: "#1a1a1a",
       ...(at ? { x: at.x, y: at.y } : {}),
     });

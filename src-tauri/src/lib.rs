@@ -323,6 +323,130 @@ fn colorref(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
 }
 
+/*
+ * Snap Layouts for a window that has no native caption.
+ *
+ * With `decorations: false` the caption is drawn by the frontend (see TitleBar.tsx), and Windows
+ * stops offering the tiling flyout that appears when you hover a real maximise button. It is not a
+ * thing a web page can put back: the flyout is the shell's, and the shell decides to show it by
+ * asking the *window* — WM_NCHITTEST — and being told HTMAXBUTTON. So the window has to answer, and
+ * to answer it has to know where the frontend drew the button. That is the whole of this module.
+ *
+ * Everything else undecorating costs is already handled elsewhere: dragging and double-click to
+ * maximise come from `data-tauri-drag-region`, and tao hit-tests the resize edges itself for
+ * undecorated resizable windows.
+ *
+ * One caveat is worth stating plainly rather than discovering later. WebView2 is a child window
+ * covering the client area, so whether the top-level window is asked about a point over the button
+ * at all is up to how that child hit-tests it. If the flyout does not appear, that is why, and the
+ * fix is on the webview side rather than here. Nothing below changes what a click does: the button
+ * in the frontend keeps working either way, because HTMAXBUTTON is only ever returned in place of
+ * HTCLIENT, and the WM_NCLBUTTON* arms only fire for messages the shell itself sent us.
+ */
+#[cfg(windows)]
+mod snap_layout {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IsZoomed, ShowWindow, HTCLIENT, HTMAXBUTTON, SW_MAXIMIZE, SW_RESTORE, WM_NCHITTEST,
+        WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+    };
+
+    /// Keyed by HWND: every window draws its own caption, and the button sits at the right edge, so
+    /// two windows of different widths do not share a rect.
+    fn rects() -> &'static Mutex<HashMap<isize, RECT>> {
+        static RECTS: OnceLock<Mutex<HashMap<isize, RECT>>> = OnceLock::new();
+        RECTS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// An arbitrary but fixed id; re-subclassing with the same pair is a no-op update rather than a
+    /// second subclass, which is what makes it safe to call this on every rect report.
+    const SUBCLASS_ID: usize = 0xB0DE;
+
+    unsafe extern "system" fn proc_(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
+        match msg {
+            WM_NCHITTEST => {
+                let hit = DefSubclassProc(hwnd, msg, wparam, lparam);
+                // Only ever upgrade a plain client hit. Anything tao already claimed — a resize
+                // edge, most importantly — must be left exactly as it decided.
+                if hit != HTCLIENT as LRESULT {
+                    return hit;
+                }
+                // lparam carries screen coordinates as two signed 16-bit halves.
+                let mut pt = POINT {
+                    x: (lparam & 0xFFFF) as i16 as i32,
+                    y: ((lparam >> 16) & 0xFFFF) as i16 as i32,
+                };
+                if ScreenToClient(hwnd, &mut pt) == 0 {
+                    return hit;
+                }
+                let inside = rects()
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.get(&(hwnd as isize)).copied())
+                    .is_some_and(|r| {
+                        pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom
+                    });
+                if inside {
+                    HTMAXBUTTON as LRESULT
+                } else {
+                    hit
+                }
+            }
+            // Swallowed so the default handler does not draw its own pressed caption button over
+            // ours; the actual toggle happens on release, as it does for a real caption button.
+            WM_NCLBUTTONDOWN if wparam == HTMAXBUTTON as WPARAM => 0,
+            WM_NCLBUTTONUP if wparam == HTMAXBUTTON as WPARAM => {
+                ShowWindow(hwnd, if IsZoomed(hwnd) != 0 { SW_RESTORE } else { SW_MAXIMIZE });
+                0
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }
+
+    /// Record where the frontend drew the maximise button, and make sure we are subclassed.
+    pub fn set_rect(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
+        if let Ok(mut m) = rects().lock() {
+            m.insert(
+                hwnd as isize,
+                RECT { left: x, top: y, right: x + w, bottom: y + h },
+            );
+        }
+        unsafe { SetWindowSubclass(hwnd, Some(proc_), SUBCLASS_ID, 0) };
+    }
+
+    /// Drop a closed window's rect so the map does not grow for the life of the process.
+    pub fn forget(hwnd: HWND) {
+        if let Ok(mut m) = rects().lock() {
+            m.remove(&(hwnd as isize));
+        }
+    }
+}
+
+/// Report the maximise button's position, in physical pixels relative to the window's client area.
+///
+/// Called by TitleBar.tsx whenever the caption is laid out or the window resized. Only Windows has
+/// anything to do with it; everywhere else the frontend button is the entire mechanism.
+#[tauri::command]
+fn set_caption_button_rect(window: tauri::WebviewWindow, x: i32, y: i32, w: i32, h: i32) {
+    #[cfg(windows)]
+    if let Ok(hwnd) = window.hwnd() {
+        snap_layout::set_rect(hwnd.0 as _, x, y, w, h);
+    }
+    #[cfg(not(windows))]
+    let _ = (window, x, y, w, h);
+}
+
 /// Set the title bar background + text colours from RGB (called by the frontend per theme).
 #[tauri::command]
 fn set_titlebar_color(window: tauri::WebviewWindow, r: u8, g: u8, b: u8, tr: u8, tg: u8, tb: u8) {
@@ -379,6 +503,7 @@ pub fn run() {
             window_at_point,
             send_file_to_window,
             set_titlebar_color,
+            set_caption_button_rect,
             peer::commands::nearby_status,
             peer::commands::nearby_start_sharing,
             peer::commands::nearby_stop_sharing,
@@ -400,10 +525,24 @@ pub fn run() {
             peer::commands::nearby_take_received,
             peer::commands::nearby_sync_state
         ])
+        // A tear-off window is a real OS window that can be closed on its own, so the caption rect
+        // it registered has to go with it rather than sit in the map for the life of the process.
+        .on_window_event(|_window, _event| {
+            #[cfg(windows)]
+            if matches!(_event, tauri::WindowEvent::Destroyed) {
+                if let Ok(hwnd) = _window.hwnd() {
+                    snap_layout::forget(hwnd.0 as _);
+                }
+            }
+        })
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                #[cfg(debug_assertions)]
-                window.open_devtools();
+                // Devtools are available in a debug build but no longer opened for you. Chromium
+                // draws a dimensions readout in the top-right corner of the viewport whenever the
+                // window resizes while they are open, and with the caption drawn by the page that
+                // readout lands squarely on top of minimise, maximise and close. Open them with
+                // F12 when they are wanted.
+                //
                 // Default dark title bar so it never flashes the OS accent before the
                 // frontend applies the active theme's colours.
                 #[cfg(windows)]

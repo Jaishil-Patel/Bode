@@ -70,7 +70,7 @@ export function Button({
     block ? "min-w-0 flex-1" : ""
   }`;
   const look = {
-    primary: "bg-accent px-4 py-1.5 font-medium text-accent-fg hover:opacity-90",
+    primary: "glass glass-cta bg-accent px-4 py-1.5 font-medium text-accent-fg hover:opacity-90",
     ghost: "border border-border bg-surface-2 px-3 py-1.5 text-text hover:border-accent/50",
     quiet: "px-2 py-1 text-xs text-muted hover:bg-surface-2 hover:text-text",
   }[variant];

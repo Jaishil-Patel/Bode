@@ -1,6 +1,6 @@
 [package]
 name = "bode"
-version = "0.4.6"
+version = "0.4.7"
 description = "A clean, lightweight, customizable PDF viewer"
 authors = ["you"]
 edition = "2021"
@@ -40,7 +40,14 @@ if-addrs = "0.15.0"
 ring = "0.17.14"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    # Snap Layouts: subclassing the window to answer WM_NCHITTEST over our own maximise button.
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 # Desktop-only: single-instance has no mobile support and must stay out of the cdylib build.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

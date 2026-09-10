@@ -966,7 +966,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         width={w * scale + 6}
         height={h * scale + 6}
         fill="none"
-        stroke="var(--accent)"
+        stroke="var(--accent-ink)"
         strokeWidth={1}
         strokeDasharray="4 3"
         style={{ pointerEvents: "none" }}
@@ -1028,7 +1028,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
             width={(draft as TextAnno & { w: number }).w * scale}
             height={(draft as TextAnno & { h: number }).h * scale}
             fill="none"
-            stroke="var(--accent)"
+            stroke="var(--accent-ink)"
             strokeWidth={1}
             strokeDasharray="4 3"
           />
@@ -1105,7 +1105,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
                 pointerEvents: annoPE,
                 touchAction: "none", // hold-and-drag on touch; don't let the WebView pan instead
                 cursor: selectMode ? "move" : "default",
-                outline: selected ? "1px dashed var(--accent)" : "none",
+                outline: selected ? "1px dashed var(--accent-ink)" : "none",
               }}
             >
               <img
@@ -1126,7 +1126,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
                     height: 10,
                     width: 10,
                     cursor: "nwse-resize",
-                    background: "var(--accent)",
+                    background: "var(--accent-ink)",
                     borderRadius: 2,
                   }}
                 />
@@ -1204,7 +1204,7 @@ function TextBox({
         width: a.w * scale,
         pointerEvents: pe,
         touchAction: "none", // hold-and-drag on touch; don't let the WebView pan instead
-        outline: selected ? "1px dashed var(--accent)" : "none",
+        outline: selected ? "1px dashed var(--accent-ink)" : "none",
         cursor: interactive && !editing ? "move" : "default",
       }}
     >
@@ -1259,7 +1259,7 @@ function TextBox({
               justifyContent: "center",
               cursor: "pointer",
               color: "#fff",
-              background: "var(--accent)",
+              background: "var(--accent-ink)",
               borderRadius: "50%",
               userSelect: "none",
             }}
@@ -1290,7 +1290,7 @@ function TextBox({
               height: 10,
               width: 10,
               cursor: "nwse-resize",
-              background: "var(--accent)",
+              background: "var(--accent-ink)",
               borderRadius: 2,
             }}
           />

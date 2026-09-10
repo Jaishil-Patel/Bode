@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import { useFormValues } from "../forms/useFormValues";
@@ -82,12 +83,25 @@ type Action = {
  */
 function OverflowMenu({ actions }: { actions: Action[] }) {
   const [open, setOpen] = useState(false);
-  const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLDivElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<React.CSSProperties>({});
+
+  // Anchored by hand because the menu is portalled out of the bar; see the note on the portal below.
+  useLayoutEffect(() => {
+    if (!open || !btn.current) return;
+    const r = btn.current.getBoundingClientRect();
+    const GAP = 4;
+    // Pinned by its right edge to the button's, so a menu wider than its trigger grows inwards
+    // rather than off the side of a phone.
+    setPos({ top: r.bottom + GAP, right: Math.max(4, window.innerWidth - r.right) });
+  }, [open, actions.length]);
 
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (e: MouseEvent | TouchEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (!btn.current?.contains(t) && !pop.current?.contains(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -107,29 +121,49 @@ function OverflowMenu({ actions }: { actions: Action[] }) {
   if (actions.length === 0) return null;
 
   return (
-    <div ref={wrap} className="relative shrink-0">
+    <div ref={btn} className="shrink-0">
       <Btn title="More actions" onClick={() => setOpen((o) => !o)} active={open}>
         <IconMore />
       </Btn>
-      {open && (
-        <div className="glass animate-fade-in absolute right-0 top-full z-50 mt-1 min-w-[11rem] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl">
-          {actions.map((action) => (
-            <button
-              key={action.id}
-              onClick={() => {
-                setOpen(false);
-                action.onClick();
-              }}
-              className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-surface-2 ${
-                action.active ? "text-accent" : "text-text"
-              }`}
-            >
-              <span className="shrink-0">{action.icon}</span>
-              {action.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {open &&
+        /*
+         * Portalled to the body, and this is the whole reason the position has to be computed:
+         * nested inside the bar it was see-through in the Glass theme, which is the one place a
+         * phone ever meets this menu.
+         *
+         * backdrop-filter does not only make an element a stacking context, it makes it a backdrop
+         * root — descendants can filter what is painted inside it and nothing behind it. So a menu
+         * living in the toolbar was frosting the toolbar's own fill, and under Glass that fill is
+         * 7% white and nothing else. It read as glass over glass: no page, no blur, see straight
+         * through to the document. Out here its backdrop is the page, like every other floating
+         * surface, and it matches the bar it dropped out of.
+         *
+         * The tools bar's own overflow menu was already built this way.
+         */
+        createPortal(
+          <div
+            ref={pop}
+            style={pos}
+            className="glass animate-fade-in fixed z-50 min-w-[11rem] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl"
+          >
+            {actions.map((action) => (
+              <button
+                key={action.id}
+                onClick={() => {
+                  setOpen(false);
+                  action.onClick();
+                }}
+                className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-surface-2 ${
+                  action.active ? "text-accent" : "text-text"
+                }`}
+              >
+                <span className="shrink-0">{action.icon}</span>
+                {action.label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -241,7 +275,7 @@ export default function Toolbar({
 
   return (
     <div
-      className="glass no-select relative z-40 flex min-h-12 items-center gap-0.5 border-b border-border bg-surface px-2 sm:gap-1"
+      className="no-select relative flex min-h-12 items-center gap-0.5 px-2 sm:gap-1"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       {/* The sidebar holds thumbnails and the outline, so it only means anything with a PDF open:

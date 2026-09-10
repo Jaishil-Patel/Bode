@@ -308,7 +308,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   onClose();
                   void exportUnlocked();
                 }}
-                className="mx-2 rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90"
+                className="glass glass-cta mx-2 rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-opacity hover:opacity-90"
               >
                 Save unlocked copy…
               </button>
@@ -350,9 +350,9 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
+    <div className="below-caption fixed inset-x-0 bottom-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
       <div
-        className="glass drawer-inset animate-fade-in flex h-full w-[560px] max-w-full bg-surface shadow-2xl"
+        className="glass glass-sheer drawer-inset animate-fade-in flex h-full w-[560px] max-w-full bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* The rail stays icon-width so the drawer still fits a phone once max-w-full clamps it. */}

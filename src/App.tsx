@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useViewer } from "./store/viewerStore";
@@ -24,6 +24,8 @@ import HtmlView from "./html/HtmlView";
 import { isAndroid } from "./platform/files";
 import { DevicesDrawer, DevicesPanel, StaleBanner } from "./devices/DevicesPanel";
 import GlassFilter from "./components/GlassFilter";
+import TitleBar from "./components/TitleBar";
+import { usePageColorsAttribute } from "./settings/usePageColors";
 import { IconOpen, IconZenExit } from "./components/icons";
 
 /** How long the hint, in either form, stays before getting out of the way. */
@@ -136,7 +138,7 @@ function EmptyState() {
         </div>
         <button
           onClick={openWithDialog}
-          className="open-cta flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 font-medium text-accent-fg transition-opacity hover:opacity-90 sm:col-start-1 sm:row-start-2 sm:justify-self-start sm:gap-3 sm:rounded-xl sm:px-7 sm:py-4 sm:text-base"
+          className="glass glass-cta open-cta flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 font-medium text-accent-fg transition-opacity hover:opacity-90 sm:col-start-1 sm:row-start-2 sm:justify-self-start sm:gap-3 sm:rounded-xl sm:px-7 sm:py-4 sm:text-base"
         >
           <IconOpen /> Open a document
         </button>
@@ -415,20 +417,40 @@ export default function App() {
     };
   }, []);
 
+  // Glass restyles itself when the pages go dark; this is what tells it they have.
+  usePageColorsAttribute();
+
   const showSidebar = doc && layout.sidebarOpen && !fullscreen;
 
   return (
-    <div className="flex h-full flex-col bg-bg">
+    /* --caption-h keeps the modal overlays clear of our caption; see `.below-caption`. */
+    <div
+      className="flex h-full flex-col bg-bg"
+      style={{ "--caption-h": fullscreen ? "0px" : "2rem" } as CSSProperties}
+    >
       {/* A filter definition only, drawing nothing. The Glass theme's chrome refracts through it. */}
       <GlassFilter />
       {/* Fullscreen drops the window chrome so only the document is left. */}
       {!fullscreen && (
         <>
-          <Toolbar
-            onOpenSettings={() => setSettingsOpen(true)}
-            onOpenDevices={() => setDevicesOpen(true)}
-            devicesOpen={devicesOpen}
-          />
+          {/*
+            * One pane, holding the caption and the toolbar.
+            *
+            * The window is undecorated, so the caption is ours — and being inside `bg-bg` is what
+            * lets the ground run through it and the toolbar without a join. But two `.glass`
+            * children would not have been enough: a backdrop-filter can only sample within its own
+            * element, so each would clamp its blur at the shared edge and the mismatch would read
+            * as a line, with each element's own cast shadow bleeding across it for good measure.
+            * The frost, the fill and the border live here instead, once, over both.
+            */}
+          <div className="glass glass-flat relative z-40 shrink-0 border-b border-border bg-surface">
+            <TitleBar />
+            <Toolbar
+              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenDevices={() => setDevicesOpen(true)}
+              devicesOpen={devicesOpen}
+            />
+          </div>
           <TabBar />
           {/* Only ever visible for a document kept offline whose owner has newer bytes. */}
           <StaleBanner />
