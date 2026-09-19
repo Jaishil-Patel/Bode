@@ -290,6 +290,8 @@ interface AnnotationState {
   update: (file: string, id: string, patch: Partial<Annotation>) => void;
   remove: (file: string, id: string) => void;
   clearPage: (file: string, pageIndex: number) => void;
+  /** Drop every annotation on a document, e.g. once a save has baked them into its pages. */
+  clearFile: (file: string) => void;
   remapPages: (file: string, map: ReadonlyMap<number, number>) => void;
   undo: () => void;
   redo: () => void;
@@ -676,6 +678,21 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
           deleted: tombstone(st.deleted, file, gone, Date.now()),
         };
       });
+      save();
+    },
+    clearFile: (file) => {
+      const list = get().byFile[file] ?? [];
+      if (list.length === 0) return;
+      pushHistory();
+      coalesceKey = null;
+      const gone = new Set(list.map((a) => a.id));
+      set((st) => ({
+        byFile: { ...st.byFile, [file]: [] },
+        // Tombstoned like any delete, or the next sync would hand them straight back.
+        deleted: tombstone(st.deleted, file, [...gone], Date.now()),
+        selectedId: st.selectedId && gone.has(st.selectedId) ? null : st.selectedId,
+        editingId: st.editingId && gone.has(st.editingId) ? null : st.editingId,
+      }));
       save();
     },
     /**

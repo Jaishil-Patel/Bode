@@ -621,8 +621,21 @@ export const useViewer = create<ViewerState>((set, get) => ({
         formValues,
       );
       if (!result.saved) return; // the user cancelled the dialog
-      // The answers are now in a file, so the form is no longer unsaved work.
-      useFormValues.getState().markSaved(key);
+      // Saved over the document itself: every mark and answer is now part of its pages. Left in the
+      // stores they would be drawn a second time, as live boxes, on top of their own flattened copy
+      // — so drop them and show the file as it now is on disk.
+      const overwrote = !!result.path && useSettings.getState().docKey(result.path) === key;
+      if (overwrote) {
+        useAnnotations.getState().clearFile(key);
+        // Answers that could not be flattened are still live fields in the file, holding exactly
+        // these values; those stay.
+        if (result.formLeftEditable) useFormValues.getState().markSaved(key);
+        else useFormValues.getState().clearDoc(key);
+        await get().reloadActive();
+      } else {
+        // The answers are now in a file, so the form is no longer unsaved work.
+        useFormValues.getState().markSaved(key);
+      }
       // Saving normally bakes the answers in; say so when it could not, because the difference
       // only shows up when someone else opens the file and finds the fields still editable.
       if (result.formLeftEditable) {

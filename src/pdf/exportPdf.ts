@@ -317,6 +317,8 @@ async function drawAnnotation(
 export interface ExportResult {
   /** False when the user cancelled the save dialog. */
   saved: boolean;
+  /** Where the file was written, when it was. */
+  path?: string;
   /**
    * The answers could not be baked into the page and were left as live form fields instead —
    * which happens when the text uses characters pdf-lib's standard fonts cannot draw.
@@ -525,7 +527,7 @@ export async function exportAnnotatedPdf(
   if (!dest) return { saved: false };
 
   await writePdfBytes(dest, out);
-  return { saved: true, formLeftEditable: fill.leftEditable, missingFields: fill.missing };
+  return { saved: true, path: dest, formLeftEditable: fill.leftEditable, missingFields: fill.missing };
 }
 
 /** Swap a path's extension for `suffix` (e.g. "/a/b.pdf" + "-unlocked.pdf" → "/a/b-unlocked.pdf"). */

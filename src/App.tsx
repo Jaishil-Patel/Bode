@@ -25,6 +25,7 @@ import { isAndroid } from "./platform/files";
 import { DevicesDrawer, DevicesPanel, StaleBanner } from "./devices/DevicesPanel";
 import GlassFilter from "./components/GlassFilter";
 import TitleBar from "./components/TitleBar";
+import LoadingIndicator from "./components/LoadingIndicator";
 import { usePageColorsAttribute } from "./settings/usePageColors";
 import { IconOpen, IconZenExit } from "./components/icons";
 
@@ -201,7 +202,7 @@ function EmptyState() {
 }
 
 export default function App() {
-  const { doc, textKind, loading, error, openWithDialog, openPath, zoomIn, zoomOut, resetZoom, toggleSearch, nextPage, prevPage } =
+  const { doc, textKind, loading, error, fileName, openWithDialog, openPath, zoomIn, zoomOut, resetZoom, toggleSearch, nextPage, prevPage } =
     useViewer();
   const { hydrate, layout, toggleSidebar } = useSettings();
   const fullscreen = useFullscreen((s) => s.fullscreen);
@@ -475,8 +476,8 @@ export default function App() {
             </div>
           )}
           {loading && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center text-muted">
-              Loading…
+            <div className="loader-scrim absolute inset-0 z-20 flex items-center justify-center">
+              <LoadingIndicator name={fileName} />
             </div>
           )}
           {doc ? (
