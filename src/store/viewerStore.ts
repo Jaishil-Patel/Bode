@@ -20,9 +20,14 @@ import {
   removeIds,
   sourceToVisible,
   movePages as movePagesIn,
+  moveBy,
+  duplicateIds,
+  rotateIds,
+  subsetManifest,
   type PageRef,
 } from "../pdf/pageOps";
-import { useAnnotations } from "../annotations/useAnnotations";
+import { useAnnotations, setPageBridge, type Annotation } from "../annotations/useAnnotations";
+import { rotateAnnotation } from "../annotations/rotate";
 import { useFormValues } from "../forms/useFormValues";
 import type { PdfDocument } from "../pdf/pdfWorker";
 import { useSettings, settingsReady } from "../settings/useSettings";
@@ -164,6 +169,14 @@ interface ViewerState {
   setOrganizeOpen: (open: boolean) => void;
   removePages: (ids: string[]) => void;
   reorderPages: (ids: string[], toIndex: number) => void;
+  /** Move the pages one slot up (-1) or down (+1). */
+  movePagesBy: (ids: string[], delta: -1 | 1) => void;
+  /** Copy the pages, each copy placed right after its original. */
+  duplicatePages: (ids: string[]) => void;
+  /** Turn the pages a quarter turn (90 clockwise, -90 counter-clockwise); annotations turn too. */
+  rotatePages: (ids: string[], delta: 90 | -90) => void;
+  /** Write just these pages, with their annotations, to a new file. The open document is untouched. */
+  extractPages: (ids: string[]) => Promise<void>;
   resetPageEdits: () => void;
   /** True when the staged page order differs from the file on disk. */
   hasPageEdits: () => boolean;
@@ -315,6 +328,8 @@ async function buildPdfSnapshot(
   const outline = await getOutline(doc).catch(() => []);
 
   // Keyed by doc key so the page you stopped on carries across devices, not just across sessions.
+  // A file opened at launch can get here before the saved positions have been read.
+  await settingsReady();
   const settings = useSettings.getState();
   const last = settings.lastPositions[settings.docKey(path)];
   const startPage = last && last.page > 1 ? last.page : 1;
@@ -394,10 +409,14 @@ function commitPages(
   get: () => ViewerState,
   next: PageRef[],
   remap: ReadonlyMap<number, number>,
+  transform?: (a: Annotation, fromIndex: number) => Annotation,
 ) {
-  const { filePath, currentPage, search } = get();
+  const { filePath, currentPage, search, pages: before } = get();
   if (filePath) {
-    useAnnotations.getState().remapPages(useSettings.getState().docKey(filePath), remap);
+    // One undo step for the page edit and the annotations it carried along.
+    useAnnotations
+      .getState()
+      .recordPageEdit(useSettings.getState().docKey(filePath), before, remap, transform);
   }
 
   // Follow the page the reader was on; if it was the one removed, stay at that position in the
@@ -535,6 +554,8 @@ export const useViewer = create<ViewerState>((set, get) => ({
           ? await buildPdfSnapshot(filePath, name, await readPdfBytes(filePath))
           : await loadTextTab(filePath, name, kind);
       tabStates.set(activeTabId, loaded);
+      // The file was re-read, so older manifests describe pages that may no longer exist as they were.
+      useAnnotations.getState().forgetPageHistory(useSettings.getState().docKey(filePath));
       // The user may have switched tabs while this was reading; only publish if still active.
       if (get().activeTabId === activeTabId) set({ ...loaded, loading: false, error: null });
     } catch (e) {
@@ -649,7 +670,19 @@ export const useViewer = create<ViewerState>((set, get) => ({
     }
   },
 
-  setOrganizeOpen: (open) => set({ organizeOpen: open }),
+  setOrganizeOpen: (open) => {
+    if (open === get().organizeOpen) return;
+    // The viewer is unmounted while organizing, so on the way back it has to be told where to be —
+    // otherwise it would open at the top of the document.
+    set(
+      open
+        ? { organizeOpen: true }
+        : {
+            organizeOpen: false,
+            scrollTarget: { page: get().currentPage, nonce: nextNonce(), instant: true },
+          },
+    );
+  },
 
   removePages: (ids) => {
     const idSet = new Set(ids);
@@ -668,6 +701,73 @@ export const useViewer = create<ViewerState>((set, get) => ({
     const next = movePagesIn(before, new Set(ids), toIndex);
     if (next.every((p, i) => p.id === before[i]?.id)) return; // no-op drop
     commitPages(set, get, next, indexRemap(before, next));
+  },
+
+  movePagesBy: (ids, delta) => {
+    const before = get().pages;
+    const next = moveBy(before, new Set(ids), delta);
+    if (next === before) return; // already at the end
+    commitPages(set, get, next, indexRemap(before, next));
+  },
+
+  duplicatePages: (ids) => {
+    const before = get().pages;
+    const next = duplicateIds(before, new Set(ids));
+    if (next.length === before.length) return;
+    commitPages(set, get, next, indexRemap(before, next));
+  },
+
+  rotatePages: (ids, delta) => {
+    const { pages: before, baseSize } = get();
+    const idSet = new Set(ids);
+    const next = rotateIds(before, idSet, delta);
+    // Annotations are stored in the page's display space, which turns with the page.
+    const turned = new Set(before.flatMap((p, i) => (idSet.has(p.id) ? [i] : [])));
+    commitPages(set, get, next, indexRemap(before, next), (a, from) => {
+      if (!turned.has(from)) return a;
+      const { width, height } = displaySize(baseSize, before[from].rotation);
+      return rotateAnnotation(a, width, height, delta);
+    });
+  },
+
+  extractPages: async (ids) => {
+    const { filePath, pages } = get();
+    if (!filePath) return;
+    const sub = subsetManifest(pages, new Set(ids));
+    if (sub.length === 0) return;
+    const key = useSettings.getState().docKey(filePath);
+    const remap = indexRemap(pages, sub);
+    const annotations = (useAnnotations.getState().byFile[key] ?? []).flatMap((a) => {
+      const to = remap.get(a.pageIndex);
+      return to === undefined ? [] : [{ ...a, pageIndex: to } as Annotation];
+    });
+    const password = pdfPasswords.get(filePath);
+    // Same rule as Save: pdf-lib can't keep the encryption, so only drop it when allowed to.
+    if (password && !useSettings.getState().layout.removePasswordOnSave) {
+      set({
+        error:
+          "This PDF is password-protected. Turn on “Remove password when saving” in Settings to extract pages.",
+      });
+      return;
+    }
+    try {
+      const result = await exportAnnotatedPdf(
+        filePath,
+        annotations,
+        password,
+        sub,
+        useFormValues.getState().byFile[key],
+        "-pages.pdf",
+      );
+      if (result.saved && result.formLeftEditable) {
+        set({
+          error:
+            "Extracted, but some answers could not be baked into the page. They are still in the file as editable form fields.",
+        });
+      }
+    } catch (e) {
+      set({ error: `Extract failed: ${e instanceof Error ? e.message : String(e)}` });
+    }
   },
 
   resetPageEdits: () => {
@@ -861,8 +961,12 @@ export const useViewer = create<ViewerState>((set, get) => ({
     if (get().pages.length && visible === undefined) return;
     const page = Math.min(Math.max(1, (visible ?? pageIndex) + 1), get().numPages || 1);
     // Dest y is from the page bottom; convert to a from-top offset using the uniform page height.
+    // A turned page's destination isn't measured from its top any more, so land on the page itself.
+    const turned = !!get().pages[page - 1]?.rotation;
     const offsetPts =
-      typeof topPts === "number" ? Math.max(0, get().baseSize.height - topPts) : undefined;
+      typeof topPts === "number" && !turned
+        ? Math.max(0, get().baseSize.height - topPts)
+        : undefined;
     set({ scrollTarget: { page, offsetPts, nonce: nextNonce() } });
   },
   nextPage: () => get().goToPage(get().currentPage + 1),
@@ -919,3 +1023,49 @@ export const useViewer = create<ViewerState>((set, get) => ({
     return current >= 0 ? matches[current] ?? null : null;
   },
 }));
+
+/** A page's on-screen size at scale 1, given the extra rotation it carries. */
+export function displaySize(
+  base: { width: number; height: number },
+  rotation: PageRef["rotation"],
+): { width: number; height: number } {
+  return rotation % 180 === 0 ? base : { width: base.height, height: base.width };
+}
+
+/*
+ * Let undo and redo reach the page manifests. History is keyed by doc key; a document may be the
+ * active tab (live state) or a background one (its snapshot in `tabStates`).
+ */
+const keyOf = (path: string) => useSettings.getState().docKey(path);
+setPageBridge({
+  get: (file) => {
+    const s = useViewer.getState();
+    if (s.filePath && keyOf(s.filePath) === file) return s.doc ? s.pages : undefined;
+    const tab = s.tabs.find((t) => keyOf(t.filePath) === file);
+    const snap = tab && tabStates.get(tab.id);
+    return snap?.doc ? snap.pages : undefined;
+  },
+  restore: (file, pages) => {
+    const s = useViewer.getState();
+    if (s.filePath && keyOf(s.filePath) === file && s.doc) {
+      const page = Math.min(Math.max(s.currentPage, 1), Math.max(pages.length, 1));
+      useViewer.setState({
+        pages,
+        numPages: pages.length,
+        currentPage: page,
+        search: s.search.matches.length ? { ...s.search, matches: [], current: -1 } : s.search,
+        scrollTarget: { page, nonce: nextNonce() },
+      });
+      return;
+    }
+    const tab = s.tabs.find((t) => keyOf(t.filePath) === file);
+    const snap = tab && tabStates.get(tab.id);
+    if (!tab || !snap?.doc) return;
+    tabStates.set(tab.id, {
+      ...snap,
+      pages,
+      numPages: pages.length,
+      currentPage: Math.min(Math.max(snap.currentPage, 1), Math.max(pages.length, 1)),
+    });
+  },
+});

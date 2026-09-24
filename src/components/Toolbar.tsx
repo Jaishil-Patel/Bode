@@ -239,15 +239,11 @@ export default function Toolbar({
   const secondary: Action[] = [
     doc && {
       id: "organize",
-      title: "Organize pages (remove & reorder)",
+      title: "Organize pages (reorder, rotate, delete…)",
       label: "Organize pages",
       icon: <IconPages />,
       active: organizeOpen,
-      onClick: () => {
-        const next = !organizeOpen;
-        setOrganizeOpen(next);
-        if (next && !layout.sidebarOpen) toggleSidebar(); // the organizer lives in the sidebar
-      },
+      onClick: () => setOrganizeOpen(!organizeOpen),
     },
     (doc || isText) && {
       id: "fullscreen",

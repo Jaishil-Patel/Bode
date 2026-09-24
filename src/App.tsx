@@ -18,6 +18,7 @@ import SignaturePad from "./components/SignaturePad";
 import PasswordPrompt from "./components/PasswordPrompt";
 import SettingsPanel from "./settings/SettingsPanel";
 import PdfViewer from "./pdf/PdfViewer";
+import PageOrganizer from "./components/PageOrganizer";
 import { getViewport } from "./pdf/viewport";
 import MarkdownView from "./markdown/MarkdownView";
 import HtmlView from "./html/HtmlView";
@@ -421,7 +422,8 @@ export default function App() {
   // Glass restyles itself when the pages go dark; this is what tells it they have.
   usePageColorsAttribute();
 
-  const showSidebar = doc && layout.sidebarOpen && !fullscreen;
+  const organizing = useViewer((s) => s.organizeOpen) && !!doc;
+  const showSidebar = doc && layout.sidebarOpen && !fullscreen && !organizing;
 
   return (
     /* --caption-h keeps the modal overlays clear of our caption; see `.below-caption`. */
@@ -459,11 +461,11 @@ export default function App() {
       )}
       {/* The annotation tools stay: they already float over the page and collapse to a single pill,
           so they're not the kind of chrome fullscreen is meant to clear away. */}
-      {doc && <AnnotationTools />}
+      {doc && !organizing && <AnnotationTools />}
       {/* Pinned regions. Outside the viewer on purpose: a portal is anchored to the window, so
           scrolling the document — or scrolling its own page out of the render window — must
           neither move it nor take it away. */}
-      {doc && <PortalLayer />}
+      {doc && !organizing && <PortalLayer />}
       {/* A phone has no F11 and no Escape, so it gets a button instead of advice about keys. */}
       {fullscreen && (isAndroid() ? <FullscreenExitButton /> : <FullscreenHint />)}
 
@@ -480,7 +482,10 @@ export default function App() {
               <LoadingIndicator name={fileName} />
             </div>
           )}
-          {doc ? (
+          {organizing ? (
+            // Takes the viewer's place: the grid needs the room, and drawing tools have no job here.
+            <PageOrganizer />
+          ) : doc ? (
             <PdfViewer />
           ) : textKind === "html" ? (
             <HtmlView />

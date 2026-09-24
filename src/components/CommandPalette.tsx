@@ -73,13 +73,20 @@ export default function CommandPalette({
       cmds.push({
         id: "organize",
         label: viewer.organizeOpen ? "Close page organizer" : "Organize pages…",
-        hint: "remove & reorder",
-        run: () => {
-          const next = !viewer.organizeOpen;
-          viewer.setOrganizeOpen(next);
-          if (next && !settings.layout.sidebarOpen) settings.toggleSidebar();
-        },
+        hint: "reorder, rotate, delete",
+        run: () => viewer.setOrganizeOpen(!viewer.organizeOpen),
       });
+      // Quick edits to the page being read, without opening the organizer.
+      const here = viewer.pages[viewer.currentPage - 1]?.id;
+      if (here) {
+        cmds.push(
+          { id: "page-rotate", label: "Rotate current page", run: () => viewer.rotatePages([here], 90) },
+          { id: "page-dup", label: "Duplicate current page", run: () => viewer.duplicatePages([here]) },
+        );
+        if (viewer.pages.length > 1) {
+          cmds.push({ id: "page-del", label: "Delete current page", run: () => viewer.removePages([here]) });
+        }
+      }
       if (viewer.hasPageEdits()) {
         cmds.push({
           id: "resetpages",

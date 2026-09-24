@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { load, type Store } from "@tauri-apps/plugin-store";
+import { load } from "@tauri-apps/plugin-store";
+import { sharedStore } from "../platform/sharedStore";
 
 /*
  * What the reader has typed into a document's form.
@@ -22,10 +23,6 @@ import { load, type Store } from "@tauri-apps/plugin-store";
 export type FieldValue = string;
 
 const STORE_FILE = "forms.json";
-const STATE_KEY = "state";
-
-let storePromise: Promise<Store> | null = null;
-const getStore = () => (storePromise ??= load(STORE_FILE, { autoSave: false, defaults: {} }));
 
 interface FormValuesState {
   hydrated: boolean;
@@ -48,20 +45,10 @@ interface FormValuesState {
 
 type Persisted = Pick<FormValuesState, "byFile" | "savedAt">;
 
-const snapshot = (s: FormValuesState): Persisted => ({ byFile: s.byFile, savedAt: s.savedAt });
-
-async function persist(get: () => FormValuesState) {
-  try {
-    const store = await getStore();
-    await store.set(STATE_KEY, snapshot(get()));
-    await store.save();
-  } catch {
-    // best-effort, exactly as annotations are
-  }
-}
 
 export const useFormValues = create<FormValuesState>((set, get) => {
-  const save = () => void persist(get);
+  // Writes only what changed, and keeps every window's answers in step: `platform/sharedStore.ts`.
+  const save = () => shared.persist();
 
   return {
     hydrated: false,
@@ -69,15 +56,8 @@ export const useFormValues = create<FormValuesState>((set, get) => {
     savedAt: {},
 
     hydrate: async () => {
-      try {
-        const store = await getStore();
-        const saved = await store.get<Persisted>(STATE_KEY);
-        if (saved) set({ byFile: dropDetectedSlots(saved.byFile ?? {}), savedAt: saved.savedAt ?? {} });
-      } catch {
-        /* defaults */
-      } finally {
-        set({ hydrated: true });
-      }
+      await shared.hydrate();
+      set({ hydrated: true });
     },
 
     setValue: (docKey, field, value) => {
@@ -140,3 +120,19 @@ function dropKey<T>(record: Record<string, T>, key: string): Record<string, T> {
   delete next[key];
   return next;
 }
+
+const shared = sharedStore({
+  open: () => load(STORE_FILE, { autoSave: false, defaults: {} }),
+  fields: {
+    byFile: {
+      read: () => useFormValues.getState().byFile,
+      apply: (v: Persisted["byFile"]) => useFormValues.setState({ byFile: dropDetectedSlots(v ?? {}) }),
+    },
+    savedAt: {
+      read: () => useFormValues.getState().savedAt,
+      apply: (v: Persisted["savedAt"]) => useFormValues.setState({ savedAt: v ?? {} }),
+    },
+  },
+  // Written by earlier versions: both fields in one blob under "state".
+  legacy: { key: "state", split: (blob: Partial<Persisted>) => ({ ...blob }) },
+});

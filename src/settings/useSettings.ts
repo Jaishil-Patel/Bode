@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { load, type Store } from "@tauri-apps/plugin-store";
+import { load } from "@tauri-apps/plugin-store";
+import { sharedStore } from "../platform/sharedStore";
 import { docKeyFor, type KeyContext } from "../platform/docKey";
 import { DEFAULT_TOOL_ORDER } from "../annotations/tools";
 import type { Tool } from "../annotations/useAnnotations";
@@ -119,10 +120,6 @@ const DEFAULT_LAYOUT: LayoutSettings = {
 };
 
 const STORE_FILE = "settings.json";
-const STATE_KEY = "state";
-
-let storePromise: Promise<Store> | null = null;
-const getStore = () => (storePromise ??= load(STORE_FILE, { autoSave: false, defaults: {} }));
 
 let hydrateOnce: Promise<void> | null = null;
 /**
@@ -144,56 +141,19 @@ type Persisted = Pick<
   | "nearbyContext"
 >;
 
-function snapshot(s: SettingsState): Persisted {
-  return {
-    theme: s.theme,
-    customTheme: s.customTheme,
-    layout: s.layout,
-    recents: s.recents,
-    lastPositions: s.lastPositions,
-    trustedHtml: s.trustedHtml,
-    settingsUpdatedAt: s.settingsUpdatedAt,
-    nearbyContext: s.nearbyContext,
-  };
-}
-
 /*
- * Settings live in one blob that is rewritten whole on every mutation, and `savePosition` fires on
- * every page turn — so scrolling a 500-page PDF used to mean 500 full-file writes. Snapshotting is
- * eager (the value written is the one at call time) but the write itself is on a trailing timer, so
- * a burst of scrolling costs one write.
+ * Writing is debounced: `savePosition` fires on every page turn, and a burst of scrolling should
+ * cost one write. Only the fields that changed are written — see `platform/sharedStore.ts`, which
+ * is also what keeps every open window on the same settings.
  */
 const PERSIST_DEBOUNCE_MS = 400;
 
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
-let pending: Persisted | null = null;
+function persist() {
+  shared.persist();
+}
 
 /** Write whatever is queued right now. Safe to call when nothing is pending. */
-async function flushSettings(): Promise<void> {
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
-  const state = pending;
-  pending = null;
-  if (!state) return;
-  try {
-    const store = await getStore();
-    await store.set(STATE_KEY, state);
-    await store.save();
-  } catch {
-    // Persistence is best-effort; ignore when the store isn't available.
-  }
-}
-
-function persist(s: SettingsState) {
-  pending = snapshot(s);
-  if (persistTimer !== null) return;
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    void flushSettings();
-  }, PERSIST_DEBOUNCE_MS);
-}
+const flushSettings = () => shared.flush();
 
 // A debounced write must not outlive the app. Android kills backgrounded processes without warning,
 // so anything still queued when the window hides has to go to disk immediately.
@@ -219,50 +179,31 @@ export const useSettings = create<SettingsState>((set, get) => ({
   // Memoized so it runs once and, more importantly, so `settingsReady()` can hand the same promise
   // to startup callers that must not read settings before they are loaded (see openPath).
   hydrate: () =>
-    (hydrateOnce ??= (async () => {
-      try {
-        const store = await getStore();
-        const saved = await store.get<Persisted>(STATE_KEY);
-        if (saved) {
-          set({
-            theme: saved.theme ?? "dark",
-            customTheme: { ...DEFAULT_CUSTOM_THEME, ...saved.customTheme },
-            layout: { ...DEFAULT_LAYOUT, ...saved.layout },
-            recents: saved.recents ?? [],
-            lastPositions: saved.lastPositions ?? {},
-            trustedHtml: saved.trustedHtml ?? [],
-            settingsUpdatedAt: saved.settingsUpdatedAt ?? 0,
-            nearbyContext: saved.nearbyContext ?? null,
-          });
-        }
-      } catch {
-        // Fall back to defaults.
-      } finally {
-        const s = get();
-        applyTheme(s.theme, s.customTheme);
-        set({ hydrated: true });
-      }
-    })()),
+    (hydrateOnce ??= shared.hydrate().then(() => {
+      const s = get();
+      applyTheme(s.theme, s.customTheme);
+      set({ hydrated: true });
+    })),
 
   setTheme: (t) => {
     set({ theme: t, settingsUpdatedAt: Date.now() });
     const s = get();
     applyTheme(t, s.customTheme, true);
-    persist(s);
+    persist();
   },
   setCustomThemeVar: (key, value) => {
     const customTheme = { ...get().customTheme, [key]: value };
     set({ customTheme, theme: "custom", settingsUpdatedAt: Date.now() });
     applyTheme("custom", customTheme);
-    persist(get());
+    persist();
   },
   updateLayout: (patch) => {
     set({ layout: { ...get().layout, ...patch } });
-    persist(get());
+    persist();
   },
   toggleSidebar: () => {
     set((st) => ({ layout: { ...st.layout, sidebarOpen: !st.layout.sidebarOpen } }));
-    persist(get());
+    persist();
   },
   addRecent: (path, name) => {
     const recents = [
@@ -270,22 +211,22 @@ export const useSettings = create<SettingsState>((set, get) => ({
       ...get().recents.filter((r) => r.path !== path),
     ].slice(0, 12);
     set({ recents });
-    persist(get());
+    persist();
   },
   clearRecents: () => {
     set({ recents: [] });
-    persist(get());
+    persist();
   },
   savePosition: (path, page) => {
     set((st) => ({ lastPositions: { ...st.lastPositions, [path]: { page, at: Date.now() } } }));
     // Position writes are frequent; the debounce in `persist` is what keeps them off the disk.
-    persist(get());
+    persist();
   },
   setHtmlTrust: (path, trusted) => {
     const without = get().trustedHtml.filter((p) => p !== path);
     // Newest first and capped, so a long tail of one-off pages can't keep running scripts forever.
     set({ trustedHtml: trusted ? [path, ...without].slice(0, 50) : without });
-    persist(get());
+    persist();
   },
 
   /**
@@ -300,19 +241,19 @@ export const useSettings = create<SettingsState>((set, get) => ({
     // Faded: a theme arriving from another device is a visible change the user did not make here,
     // and a snap gives no clue that anything was received.
     applyTheme(s.theme, s.customTheme, true);
-    persist(s);
+    persist();
     void flushSettings();
   },
 
   mergePositions: (positions) => {
     set((st) => ({ lastPositions: mergePositions(st.lastPositions, positions) }));
-    persist(get());
+    persist();
   },
 
   /** Replace positions wholesale, for re-keying from local paths to doc keys. */
   setPositions: (lastPositions) => {
     set({ lastPositions });
-    persist(get());
+    persist();
   },
 
   setNearbyContext: (ctx) => {
@@ -320,11 +261,52 @@ export const useSettings = create<SettingsState>((set, get) => ({
     // Writing unconditionally would persist on every three-second status poll.
     if (current?.deviceId === ctx?.deviceId && current?.shareRoot === ctx?.shareRoot) return;
     set({ nearbyContext: ctx });
-    persist(get());
+    persist();
   },
 
   docKey: (path) => docKeyFor(path, get().nearbyContext ?? { deviceId: null, shareRoot: null }),
 }));
+
+/*
+ * The settings file, one key per field. What arrives from it — at startup, or from another window
+ * changing a setting — goes straight into the store; a theme arriving that way is applied too.
+ */
+const settingsField = <K extends keyof Persisted>(
+  key: K,
+  normalize: (v: Persisted[K]) => Persisted[K] = (v) => v,
+  extra: { merge?: (stored: Persisted[K], local: Persisted[K]) => Persisted[K]; mergeOnWrite?: boolean } = {},
+) => ({
+  read: () => useSettings.getState()[key],
+  apply: (v: Persisted[K]) => {
+    useSettings.setState({ [key]: normalize(v) } as Partial<SettingsState>);
+    const s = useSettings.getState();
+    // Before hydration finishes the theme is applied once, at the end, without a fade.
+    if ((key === "theme" || key === "customTheme") && s.hydrated) applyTheme(s.theme, s.customTheme, true);
+  },
+  ...extra,
+});
+
+const shared = sharedStore({
+  open: () => load(STORE_FILE, { autoSave: false, defaults: {} }),
+  debounceMs: PERSIST_DEBOUNCE_MS,
+  fields: {
+    theme: settingsField("theme"),
+    customTheme: settingsField("customTheme", (v) => ({ ...DEFAULT_CUSTOM_THEME, ...v })),
+    layout: settingsField("layout", (v) => ({ ...DEFAULT_LAYOUT, ...v })),
+    // A file opened at launch is recorded before the saved list is read; both are kept.
+    recents: settingsField("recents", (v) => v ?? [], { merge: mergeRecents }),
+    // Two windows each record the page they are on; both entries are kept, newest per document.
+    lastPositions: settingsField("lastPositions", (v) => v ?? {}, {
+      merge: (stored, local) => mergePositions(local, stored),
+      mergeOnWrite: true,
+    }),
+    trustedHtml: settingsField("trustedHtml", (v) => v ?? []),
+    settingsUpdatedAt: settingsField("settingsUpdatedAt", (v) => v ?? 0),
+    nearbyContext: settingsField("nearbyContext", (v) => v ?? null),
+  },
+  // Written by earlier versions: everything in one blob under "state".
+  legacy: { key: "state", split: (blob: Partial<Persisted>) => ({ ...blob }) },
+});
 
 /** Everything this device is willing to hand another one. See `mergeSettings` for what is excluded. */
 export interface SyncableSettings {
@@ -359,12 +341,7 @@ export function mergeSettings(
 ): SyncableSettings {
   const remoteIsNewer = (remote.settingsUpdatedAt ?? 0) > (local.settingsUpdatedAt ?? 0);
 
-  const byPath = new Map<string, RecentFile>();
-  for (const r of [...local.recents, ...remote.recents]) {
-    const existing = byPath.get(r.path);
-    if (!existing || r.openedAt > existing.openedAt) byPath.set(r.path, r);
-  }
-  const recents = [...byPath.values()].sort((a, b) => b.openedAt - a.openedAt).slice(0, 12);
+  const recents = mergeRecents(remote.recents, local.recents);
 
   return {
     theme: remoteIsNewer ? remote.theme : local.theme,
@@ -372,6 +349,16 @@ export function mergeSettings(
     recents,
     settingsUpdatedAt: Math.max(local.settingsUpdatedAt ?? 0, remote.settingsUpdatedAt ?? 0),
   };
+}
+
+/** Both lists, newest first and re-capped; a file on both keeps its latest open. */
+export function mergeRecents(a: RecentFile[], b: RecentFile[]): RecentFile[] {
+  const byPath = new Map<string, RecentFile>();
+  for (const r of [...(a ?? []), ...(b ?? [])]) {
+    const existing = byPath.get(r.path);
+    if (!existing || r.openedAt > existing.openedAt) byPath.set(r.path, r);
+  }
+  return [...byPath.values()].sort((x, y) => y.openedAt - x.openedAt).slice(0, 12);
 }
 
 /** Per-key last-write-wins. An entry with no timestamp is from before sync existed, so it loses. */

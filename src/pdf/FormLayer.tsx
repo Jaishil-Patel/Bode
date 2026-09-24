@@ -45,6 +45,8 @@ interface Props {
   pageIndex: number;
   scale: number;
   filePath: string;
+  /** Extra rotation the viewer applies to this page. */
+  rotation?: number;
 }
 
 /** Fields that are ours to draw. The rest are already painted on the canvas. */
@@ -64,7 +66,14 @@ const FILLABLE_BORDER = "color-mix(in srgb, var(--accent-ink) 38%, transparent)"
 /** A required field nobody has answered yet. Amber reads on every theme, light or dark. */
 const REQUIRED_BORDER = "#f59e0b";
 
-export default function FormLayer({ doc, pageNumber, pageIndex, scale, filePath }: Props) {
+export default function FormLayer({
+  doc,
+  pageNumber,
+  pageIndex,
+  scale,
+  filePath,
+  rotation = 0,
+}: Props) {
   const docKey = useSettings((s) => s.docKey(filePath));
   const values = useFormValues((s) => s.byFile[docKey]);
   const setValue = useFormValues((s) => s.setValue);
@@ -80,7 +89,7 @@ export default function FormLayer({ doc, pageNumber, pageIndex, scale, filePath 
   // Read the page's real fields once. Deliberately not keyed on `scale`.
   useEffect(() => {
     let cancelled = false;
-    readFormFields(doc, pageNumber)
+    readFormFields(doc, pageNumber, rotation)
       .then((f) => {
         if (!cancelled) setFields(f);
       })
@@ -90,7 +99,7 @@ export default function FormLayer({ doc, pageNumber, pageIndex, scale, filePath 
     return () => {
       cancelled = true;
     };
-  }, [doc, pageNumber]);
+  }, [doc, pageNumber, rotation]);
 
   // Guessing is opt-in (the form tool) and only makes sense where there is no real form.
   const detecting = tool === "form" && fields.length === 0;
@@ -100,7 +109,7 @@ export default function FormLayer({ doc, pageNumber, pageIndex, scale, filePath 
       return;
     }
     let cancelled = false;
-    readDetectedSlots(doc, pageNumber, pageIndex)
+    readDetectedSlots(doc, pageNumber, pageIndex, rotation)
       .then((s) => {
         if (!cancelled) setSlots(s);
       })
@@ -110,7 +119,7 @@ export default function FormLayer({ doc, pageNumber, pageIndex, scale, filePath 
     return () => {
       cancelled = true;
     };
-  }, [detecting, doc, pageNumber, pageIndex]);
+  }, [detecting, doc, pageNumber, pageIndex, rotation]);
 
   /*
    * Whether a click on this layer lands on a field.

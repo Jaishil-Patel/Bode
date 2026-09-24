@@ -1,4 +1,5 @@
 import type { PdfDocument } from "./pdfWorker";
+import { rotatedViewport } from "./pageOps";
 
 /*
  * Reading a page's interactive form fields.
@@ -119,11 +120,13 @@ function initialValue(a: WidgetData): string {
 export async function readFormFields(
   doc: PdfDocument,
   pageNumber: number,
+  /** Extra rotation the viewer applies to this page. */
+  rotation = 0,
 ): Promise<FormField[]> {
   const page = await doc.getPage(pageNumber);
   const annotations = await page.getAnnotations({ intent: "display" });
   // Scale 1: display points. See the note at the top of the file.
-  const viewport = page.getViewport({ scale: 1 });
+  const viewport = rotatedViewport(page, 1, rotation);
 
   const out: FormField[] = [];
   for (const raw of annotations as WidgetData[]) {

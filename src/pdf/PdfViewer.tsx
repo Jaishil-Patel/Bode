@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useViewer } from "../store/viewerStore";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useViewer, displaySize } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import { setViewport } from "./viewport";
 import PdfPage from "./PdfPage";
@@ -32,6 +32,18 @@ function useSettledScale(scale: number, ms: number): number {
     return () => clearTimeout(t);
   }, [scale, settled, ms]);
   return settled;
+}
+
+/** Index of the last page whose top is at or above `y` — the page that `y` falls on. */
+function pageAt(tops: number[], count: number, y: number): number {
+  let lo = 0;
+  let hi = Math.max(count - 1, 0);
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (tops[mid] <= y) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
 }
 
 export default function PdfViewer() {
@@ -98,7 +110,7 @@ export default function PdfViewer() {
    * costs the compositor a matrix and React nothing at all, so the gesture runs at display rate;
    * the store hears about it once, when the fingers lift.
    *
-   * The preview and the committed layout agree exactly. A page sits at `pad + i*rowH`, so a zoom
+   * The preview and the committed layout agree exactly. A page sits at `pad + tops[i]`, so a zoom
    * maps y to `pad + (y - pad) * f` while a transform about the focal point maps it to
    * `fy + (y - fy) * f` — different formulas, but once the scroll correction below is applied
    * both put a given point at `f * (y - sy - cy) + cy`, so nothing shifts at the handover.
@@ -262,13 +274,25 @@ export default function PdfViewer() {
     };
   }, []);
 
+  /*
+   * Each page's size at scale 1. Pages share the document's size except where one has been
+   * turned a quarter, which swaps its width and height — so the layout below is a running sum of
+   * page heights rather than a single row height.
+   */
+  const sizes = useMemo(
+    () => manifest.map((p) => displaySize(baseSize, p.rotation)),
+    [manifest, baseSize],
+  );
+  // Fit against the largest page, so a turned (landscape) page is never cropped.
+  const maxW = sizes.reduce((m, sz) => Math.max(m, sz.width), sizes.length ? 0 : baseSize.width);
+  const maxH = sizes.reduce((m, sz) => Math.max(m, sz.height), sizes.length ? 0 : baseSize.height);
+
   // Resolve fit mode into an actual scale and publish it.
   const usableW = Math.max(size.w - PADDING * 2, 100);
   const usableH = Math.max(size.h - PADDING * 2, 100);
   let resolved = customScale;
-  if (fitMode === "width") resolved = usableW / baseSize.width;
-  else if (fitMode === "page")
-    resolved = Math.min(usableW / baseSize.width, usableH / baseSize.height);
+  if (fitMode === "width") resolved = usableW / maxW;
+  else if (fitMode === "page") resolved = Math.min(usableW / maxW, usableH / maxH);
   resolved = Math.min(Math.max(resolved, 0.1), 6);
 
   useEffect(() => {
@@ -277,9 +301,13 @@ export default function PdfViewer() {
 
   const renderScale = useSettledScale(scale, SETTLE_MS);
 
-  const pageW = baseSize.width * scale;
-  const pageH = baseSize.height * scale;
-  const rowH = pageH + pageGap;
+  // tops[i] is where page i starts; tops[numPages] is the height of the whole run.
+  const tops = useMemo(() => {
+    const out = [0];
+    for (const sz of sizes) out.push(out[out.length - 1] + sz.height * scale + pageGap);
+    return out;
+  }, [sizes, scale, pageGap]);
+  const topOf = (page: number) => tops[Math.min(Math.max(page - 1, 0), tops.length - 1)] ?? 0;
 
   // Keep the view anchored when the scale changes: on the gesture's focal point if the zoom
   // came from a pinch/ctrl+wheel, otherwise on the current page (zoom buttons and shortcuts).
@@ -295,14 +323,15 @@ export default function PdfViewer() {
         el.scrollTop = (a.sy + a.cy - pad) * ratio + pad - a.cy;
         zoomAnchor.current = null;
       } else if (continuous) {
-        el.scrollTop = (currentPage - 1) * rowH;
+        el.scrollTop = topOf(currentPage);
       }
       // Whatever a scroll request was still travelling towards was measured at the old zoom, so
       // it is stale now; this position is the settled one.
       pendingScroll.current = null;
       prevScale.current = scale;
     }
-  }, [scale, rowH, currentPage, continuous, pageGap]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scale, tops, currentPage, continuous, pageGap]);
 
   // Scroll-driven virtualization window + current page tracking.
   const [scrollTop, setScrollTop] = useState(0);
@@ -314,7 +343,7 @@ export default function PdfViewer() {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         setScrollTop(el.scrollTop);
-        if (!continuous || rowH <= 0) return;
+        if (!continuous || numPages === 0) return;
         const p = pendingScroll.current;
         if (p) {
           // Arrived, or the user grabbed the scroller mid-flight and the request is now moot.
@@ -322,7 +351,7 @@ export default function PdfViewer() {
           else return;
         }
         const center = el.scrollTop + el.clientHeight / 2;
-        setCurrentPage(Math.min(Math.max(Math.round(center / rowH + 0.5), 1), numPages));
+        setCurrentPage(pageAt(tops, numPages, center) + 1);
       });
     };
     el.addEventListener("scroll", onScroll, { passive: true });
@@ -330,7 +359,7 @@ export default function PdfViewer() {
       el.removeEventListener("scroll", onScroll);
       cancelAnimationFrame(raf);
     };
-  }, [continuous, rowH, numPages, setCurrentPage]);
+  }, [continuous, tops, numPages, setCurrentPage]);
 
   // Honor programmatic navigation (page jumps, search results, restored position). Each request
   // is acted on once, by nonce — the effect also re-runs whenever the zoom changes, and replaying
@@ -344,7 +373,7 @@ export default function PdfViewer() {
       // Add the in-page offset for link destinations, leaving a small margin above the target.
       const within = scrollTarget.offsetPts ? scrollTarget.offsetPts * scale - 12 : 0;
       const max = Math.max(0, el.scrollHeight - el.clientHeight);
-      const top = Math.min((scrollTarget.page - 1) * rowH + Math.max(0, within), max);
+      const top = Math.min(topOf(scrollTarget.page) + Math.max(0, within), max);
       // Claim the page up front rather than waiting for the scroll to land on it. The zoom may
       // still be resolving underneath this — the row height it was measured against can change a
       // frame later — and the anchoring effect above re-derives the offset from the current page,
@@ -355,13 +384,16 @@ export default function PdfViewer() {
     } else {
       setCurrentPage(scrollTarget.page);
     }
-  }, [scrollTarget, rowH, scale, continuous, setCurrentPage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollTarget, tops, scale, continuous, setCurrentPage]);
 
   if (!doc) return null;
 
   // ---- Single-page mode ----
   if (!continuous) {
     const cur = useViewer.getState().currentMatch();
+    const ref = manifest[currentPage - 1];
+    const shown = sizes[currentPage - 1] ?? baseSize;
     return (
       <div ref={scrollRef} className="h-full w-full overflow-auto">
         <div
@@ -372,11 +404,12 @@ export default function PdfViewer() {
           <PdfPage
             doc={doc}
             pageNumber={currentPage}
-            srcPage={manifest[currentPage - 1]?.srcPage}
+            srcPage={ref?.srcPage}
+            rotation={ref?.rotation}
             scale={scale}
             renderScale={renderScale}
-            width={pageW}
-            height={pageH}
+            width={shown.width * scale}
+            height={shown.height * scale}
             visible
             query={search.query}
             currentMatch={cur}
@@ -387,22 +420,24 @@ export default function PdfViewer() {
   }
 
   // ---- Continuous mode with virtualization ----
-  const first = Math.max(0, Math.floor(scrollTop / rowH) - BUFFER);
-  const last = Math.min(numPages - 1, Math.ceil((scrollTop + size.h) / rowH) + BUFFER);
+  const first = Math.max(0, pageAt(tops, numPages, scrollTop) - BUFFER);
+  const last = Math.min(numPages - 1, pageAt(tops, numPages, scrollTop + size.h) + BUFFER);
   const currentMatch = useViewer.getState().currentMatch();
 
   const pages = [];
   for (let i = first; i <= last; i++) {
+    const shown = sizes[i] ?? baseSize;
     pages.push(
-      <div key={manifest[i]?.id ?? i} style={{ position: "absolute", top: i * rowH, left: 0, right: 0 }}>
+      <div key={manifest[i]?.id ?? i} style={{ position: "absolute", top: tops[i], left: 0, right: 0 }}>
         <PdfPage
           doc={doc}
           pageNumber={i + 1}
           srcPage={manifest[i]?.srcPage}
+          rotation={manifest[i]?.rotation}
           scale={scale}
           renderScale={renderScale}
-          width={pageW}
-          height={pageH}
+          width={shown.width * scale}
+          height={shown.height * scale}
           visible
           query={search.query}
           currentMatch={currentMatch}
@@ -417,7 +452,7 @@ export default function PdfViewer() {
         ref={pagesRef}
         style={{
           position: "relative",
-          height: numPages * rowH,
+          height: tops[numPages] ?? 0,
           paddingTop: pageGap / 2,
         }}
       >

@@ -47,6 +47,7 @@ export default function PortalLayer() {
           // Pages can be reordered or deleted after a portal is opened, so the source page is
           // looked up through the manifest every render rather than captured at pin time.
           srcPage={manifest[p.pageIndex]?.srcPage ?? p.pageIndex + 1}
+          rotation={manifest[p.pageIndex]?.rotation ?? 0}
           onJump={() => goToPage(p.pageIndex + 1)}
         />
       ))}

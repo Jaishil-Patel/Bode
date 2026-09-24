@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { PdfDocument } from "../pdf/pdfWorker";
+import { rotatedViewport } from "../pdf/pageOps";
 import { IconClose, IconChevronDown, IconChevronRight } from "../components/icons";
 import { INVERT_FILTER, usePageInverted } from "../settings/usePageColors";
 import { PORTAL_Z_BASE, PORTAL_Z_TOP, TITLE_H, usePortals, type Portal } from "./usePortals";
@@ -31,6 +32,7 @@ export default function PortalPane({
   doc,
   docKey,
   srcPage,
+  rotation,
   onJump,
 }: {
   portal: Portal;
@@ -40,6 +42,8 @@ export default function PortalPane({
   docKey: string;
   /** 1-based page in the source document, which differs from the viewer's page once pages move. */
   srcPage: number;
+  /** Extra rotation the viewer applies to the page, so the region is cut from what is on screen. */
+  rotation: number;
   onJump: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -61,7 +65,7 @@ export default function PortalPane({
       if (cancelled) return;
       const dpr = window.devicePixelRatio || 1;
       const target = Math.min(MAX_SCALE, (portal.w / Math.max(1, portal.rect.w)) * OVERSAMPLE);
-      const vp = page.getViewport({ scale: target });
+      const vp = rotatedViewport(page, target, rotation);
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (!canvas || !ctx) return;
@@ -94,7 +98,7 @@ export default function PortalPane({
       task?.cancel();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, srcPage, portal.rect.x, portal.rect.y, portal.rect.w, portal.rect.h]);
+  }, [doc, srcPage, rotation, portal.rect.x, portal.rect.y, portal.rect.w, portal.rect.h]);
 
   /*
    * Shared by the title-bar drag and the resize grip: both move numbers in the store.

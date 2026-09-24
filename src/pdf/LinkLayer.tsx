@@ -3,11 +3,14 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { PdfDocument } from "./pdfWorker";
 import { resolveDestination } from "./usePdfDocument";
 import { useViewer } from "../store/viewerStore";
+import { rotatedViewport } from "./pageOps";
 
 interface Props {
   doc: PdfDocument;
   pageNumber: number; // 1-based
   scale: number;
+  /** Extra rotation the viewer applies to this page. */
+  rotation?: number;
 }
 
 interface LinkRect {
@@ -28,7 +31,7 @@ const isSafeUrl = (url: string) => /^(https?:|mailto:)/i.test(url);
  * The container is pointer-events:none so text selection and annotation drawing pass through;
  * only the link rects themselves capture clicks.
  */
-export default function LinkLayer({ doc, pageNumber, scale }: Props) {
+export default function LinkLayer({ doc, pageNumber, scale, rotation = 0 }: Props) {
   const [links, setLinks] = useState<LinkRect[]>([]);
 
   useEffect(() => {
@@ -38,7 +41,7 @@ export default function LinkLayer({ doc, pageNumber, scale }: Props) {
       if (cancelled) return;
       const annotations = await page.getAnnotations({ intent: "display" });
       if (cancelled) return;
-      const viewport = page.getViewport({ scale });
+      const viewport = rotatedViewport(page, scale, rotation);
 
       const out: LinkRect[] = [];
       for (const a of annotations as Array<Record<string, unknown>>) {
@@ -63,7 +66,7 @@ export default function LinkLayer({ doc, pageNumber, scale }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [doc, pageNumber, scale]);
+  }, [doc, pageNumber, scale, rotation]);
 
   if (links.length === 0) return null;
 

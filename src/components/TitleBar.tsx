@@ -18,6 +18,9 @@
  *   - Snap Layouts (the tiling flyout on hovering maximise): needs the window to answer a Win32
  *     hit-test with HTMAXBUTTON, which is `set_caption_button_rect` in lib.rs — this component's
  *     job is only to report where the button ended up.
+ *   - clicks on the buttons themselves: Tauri's resize strip runs along the top edge, over the
+ *     buttons, and would take a press in their top few pixels. lib.rs cuts the buttons out of it,
+ *     which is why the whole group's rect is reported too.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -65,6 +68,7 @@ function currentWindow() {
 export default function TitleBar() {
   const [maximised, setMaximised] = useState(false);
   const maxBtn = useRef<HTMLButtonElement>(null);
+  const controls = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isAndroid()) return;
@@ -82,7 +86,8 @@ export default function TitleBar() {
   }, []);
 
   /*
-   * Tell Rust where the maximise button is, in physical pixels relative to the window.
+   * Tell Rust where the buttons are, in physical pixels relative to the window: the maximise button
+   * for Snap Layouts, and the whole group so it can be kept clear of the resize strip.
    *
    * Snap Layouts is not something a web page can offer: Windows shows the flyout when the window
    * itself reports the cursor is over its maximise button, which is a WM_NCHITTEST answer. Rust
@@ -90,14 +95,15 @@ export default function TitleBar() {
    * hence the round trip. Re-measured on resize because the button is pinned to the right edge.
    */
   const reportRect = useCallback(() => {
-    if (isAndroid() || !maxBtn.current) return;
-    const r = maxBtn.current.getBoundingClientRect();
+    if (isAndroid() || !maxBtn.current || !controls.current) return;
     const s = window.devicePixelRatio || 1;
+    const px = (el: HTMLElement) => {
+      const r = el.getBoundingClientRect();
+      return [r.left, r.top, r.width, r.height].map((v) => Math.round(v * s));
+    };
     invoke("set_caption_button_rect", {
-      x: Math.round(r.left * s),
-      y: Math.round(r.top * s),
-      w: Math.round(r.width * s),
-      h: Math.round(r.height * s),
+      max: px(maxBtn.current),
+      controls: px(controls.current),
     }).catch(() => {
       // Not Windows, or the command is unavailable: the button still works, just without the flyout.
     });
@@ -138,24 +144,26 @@ export default function TitleBar() {
         />
         <span className="truncate text-xs font-medium text-muted">Bode</span>
       </div>
-      <button className={btn} title="Minimise" onClick={() => void win?.minimize()}>
-        <IconMinimise />
-      </button>
-      <button
-        ref={maxBtn}
-        className={btn}
-        title={maximised ? "Restore" : "Maximise"}
-        onClick={() => void win?.toggleMaximize()}
-      >
-        {maximised ? <IconRestore /> : <IconMaximise />}
-      </button>
-      <button
-        className={`${btn} hover:!bg-[#c42b1c] hover:!text-white`}
-        title="Close"
-        onClick={() => void win?.close()}
-      >
-        <IconClose />
-      </button>
+      <div ref={controls} className="flex shrink-0">
+        <button className={btn} title="Minimise" onClick={() => void win?.minimize()}>
+          <IconMinimise />
+        </button>
+        <button
+          ref={maxBtn}
+          className={btn}
+          title={maximised ? "Restore" : "Maximise"}
+          onClick={() => void win?.toggleMaximize()}
+        >
+          {maximised ? <IconRestore /> : <IconMaximise />}
+        </button>
+        <button
+          className={`${btn} hover:!bg-[#c42b1c] hover:!text-white`}
+          title="Close"
+          onClick={() => void win?.close()}
+        >
+          <IconClose />
+        </button>
+      </div>
     </div>
   );
 }

@@ -207,6 +207,17 @@ export const IconGrip = (p: P) =>
 // Organize pages: a page with a second sheet behind it, for page-level editing.
 export const IconPages = (p: P) =>
   svg(<><path d="M9 3h7l4 4v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M15 3v5h5" /><path d="M4 8v11a3 3 0 0 0 3 3h9" /></>, p.className);
+// Rotate a page a quarter turn: an open arc with the arrowhead on the turning side.
+export const IconRotateCw = (p: P) =>
+  svg(<><path d="M20 11a8 8 0 1 1-2.3-5.7" /><path d="M20 4v5h-5" /></>, p.className);
+export const IconRotateCcw = (p: P) =>
+  svg(<><path d="M4 11a8 8 0 1 0 2.3-5.7" /><path d="M4 4v5h5" /></>, p.className);
+// Duplicate: two overlapping sheets.
+export const IconDuplicate = (p: P) =>
+  svg(<><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></>, p.className);
+// Extract: an arrow leaving a page, for writing chosen pages to a new file.
+export const IconExtract = (p: P) =>
+  svg(<><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8" /><path d="M11 12h10" /><path d="m17 8 4 4-4 4" /></>, p.className);
 export const IconEraser = (p: P) =>
   svg(<><path d="M7 21 3.5 17.5a2 2 0 0 1 0-2.8l8.7-8.7a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8L13 19" /><path d="M7 21h12" /><path d="m9 12 4 4" /></>, p.className);
 

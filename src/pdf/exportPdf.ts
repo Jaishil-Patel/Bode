@@ -474,6 +474,8 @@ export async function exportAnnotatedPdf(
   manifest?: PageRef[],
   /** Answers typed into the document's form, by field name (or detected-slot key). */
   formValues?: Record<string, string>,
+  /** What to append to the suggested file name, when the default doesn't describe the output. */
+  saveSuffix?: string,
 ): Promise<ExportResult> {
   const raw = await readPdfBytes(filePath);
   // pdf-lib can't parse an encrypted PDF, so decrypt via the Rust backend before flattening.
@@ -519,7 +521,7 @@ export async function exportAnnotatedPdf(
   const out = await doc.save({ updateFieldAppearances: false });
 
   // A decrypted save is a different artefact than a signed one — name it accordingly.
-  const suffix = password ? "-unlocked.pdf" : "-edited.pdf";
+  const suffix = saveSuffix ?? (password ? "-unlocked.pdf" : "-edited.pdf");
   const dest = await save({
     defaultPath: suggestedSaveName(filePath, suffix),
     filters: [{ name: "PDF", extensions: ["pdf"] }],

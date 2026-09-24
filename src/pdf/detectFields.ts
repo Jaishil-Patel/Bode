@@ -1,5 +1,6 @@
 import { pdfjs, type PdfDocument } from "./pdfWorker";
 import type { FieldRect } from "./formFields";
+import { rotatedViewport } from "./pageOps";
 
 /*
  * Guessing where a flat form wants to be filled in.
@@ -337,9 +338,11 @@ export async function readDetectedSlots(
   doc: PdfDocument,
   pageNumber: number,
   pageIndex: number,
+  /** Extra rotation the viewer applies to this page. */
+  rotation = 0,
 ): Promise<DetectedSlot[]> {
   const page = await doc.getPage(pageNumber);
-  const viewport = page.getViewport({ scale: 1 });
+  const viewport = rotatedViewport(page, 1, rotation);
 
   const content = await page.getTextContent();
   const texts: TextBox[] = [];

@@ -8,6 +8,7 @@ import { INVERT_FILTER, usePageInverted } from "../settings/usePageColors";
 import AnnotationLayer from "../annotations/AnnotationLayer";
 import LinkLayer from "./LinkLayer";
 import FormLayer from "./FormLayer";
+import { rotatedViewport } from "./pageOps";
 
 interface Props {
   doc: PdfDocument;
@@ -18,6 +19,8 @@ interface Props {
    * been reordered or removed. Defaults to `pageNumber` for an unedited document.
    */
   srcPage?: number;
+  /** Extra clockwise rotation from the page manifest, on top of the page's own /Rotate. */
+  rotation?: number;
   /** Live scale: drives layout, and every overlay that has to stay pinned to the page. */
   scale: number;
   /**
@@ -89,6 +92,7 @@ export default function PdfPage({
   doc,
   pageNumber,
   srcPage,
+  rotation = 0,
   scale,
   renderScale,
   width,
@@ -169,7 +173,7 @@ export default function PdfPage({
       if (cancelled || token !== renderToken.current) return;
 
       const dpr = window.devicePixelRatio || 1;
-      const viewport = page.getViewport({ scale: renderScale });
+      const viewport = rotatedViewport(page, renderScale, rotation);
       const canvas = canvasRef.current;
       const textLayer = textLayerRef.current;
       if (!canvas || !textLayer) return;
@@ -327,7 +331,7 @@ export default function PdfPage({
       cancelled = true;
       renderTask?.cancel();
     };
-  }, [doc, src, pageNumber, renderScale, visible, query, currentMatch, inverted]);
+  }, [doc, src, rotation, pageNumber, renderScale, visible, query, currentMatch, inverted]);
 
   return (
     <div
@@ -347,7 +351,7 @@ export default function PdfPage({
         <>
           <canvas ref={canvasRef} className="block" />
           <div ref={textLayerRef} className={`textLayer${customSelect ? " bode-nonative" : ""}`} />
-          <LinkLayer doc={doc} pageNumber={src} scale={scale} />
+          <LinkLayer doc={doc} pageNumber={src} scale={scale} rotation={rotation} />
           {filePath && (
             <FormLayer
               doc={doc}
@@ -355,6 +359,7 @@ export default function PdfPage({
               pageIndex={pageNumber - 1}
               scale={scale}
               filePath={filePath}
+              rotation={rotation}
             />
           )}
           {filePath && (

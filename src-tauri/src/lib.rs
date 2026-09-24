@@ -342,23 +342,46 @@ fn colorref(r: u8, g: u8, b: u8) -> u32 {
  * fix is on the webview side rather than here. Nothing below changes what a click does: the button
  * in the frontend keeps working either way, because HTMAXBUTTON is only ever returned in place of
  * HTCLIENT, and the WM_NCLBUTTON* arms only fire for messages the shell itself sent us.
+ *
+ * The same subclass also keeps the caption buttons clickable. To let an undecorated window be
+ * resized, Tauri lays a native child window ("TAURI_DRAG_RESIZE_BORDERS") over the window's edges,
+ * and along the top that strip runs the full width — straight across minimise, maximise and close.
+ * A press in the top few pixels of a button landed on the strip and started a resize instead of a
+ * click, which is why the buttons sometimes needed a second, lower click. Tauri redraws the strip
+ * on every WM_SIZE; this subclass is installed after Tauri's, so it runs first, lets Tauri redraw,
+ * then cuts the buttons back out of the strip.
  */
 #[cfg(windows)]
 mod snap_layout {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+    use windows_sys::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, DeleteObject, GetWindowRgn, OffsetRect, ScreenToClient,
+        SetWindowRgn,
+        ERROR, RGN_DIFF,
+    };
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        IsZoomed, ShowWindow, HTCLIENT, HTMAXBUTTON, SW_MAXIMIZE, SW_RESTORE, WM_NCHITTEST,
-        WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+        FindWindowExW, GetClientRect, IsZoomed, ShowWindow, HTCLIENT, HTMAXBUTTON, SW_MAXIMIZE, SW_RESTORE,
+        WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_SIZE,
     };
+
+    /// Where each window's caption buttons are, in client pixels: the maximise button alone (for
+    /// the Snap Layouts hit-test) and all three together (cut out of Tauri's resize strip).
+    #[derive(Clone, Copy)]
+    struct Caption {
+        max: RECT,
+        controls: RECT,
+        /// Client width when these were measured. The buttons are pinned to the right edge, so on a
+        /// resize they move by exactly the change in width — known here before the page re-reports.
+        client_w: i32,
+    }
 
     /// Keyed by HWND: every window draws its own caption, and the button sits at the right edge, so
     /// two windows of different widths do not share a rect.
-    fn rects() -> &'static Mutex<HashMap<isize, RECT>> {
-        static RECTS: OnceLock<Mutex<HashMap<isize, RECT>>> = OnceLock::new();
+    fn rects() -> &'static Mutex<HashMap<isize, Caption>> {
+        static RECTS: OnceLock<Mutex<HashMap<isize, Caption>>> = OnceLock::new();
         RECTS.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
@@ -393,7 +416,7 @@ mod snap_layout {
                 let inside = rects()
                     .lock()
                     .ok()
-                    .and_then(|m| m.get(&(hwnd as isize)).copied())
+                    .and_then(|m| m.get(&(hwnd as isize)).map(|c| c.max))
                     .is_some_and(|r| {
                         pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom
                     });
@@ -410,19 +433,66 @@ mod snap_layout {
                 ShowWindow(hwnd, if IsZoomed(hwnd) != 0 { SW_RESTORE } else { SW_MAXIMIZE });
                 0
             }
+            WM_SIZE => {
+                // Tauri's own subclass, further down the chain, redraws the resize strip here.
+                let res = DefSubclassProc(hwnd, msg, wparam, lparam);
+                clear_buttons_from_resize_strip(hwnd);
+                res
+            }
             _ => DefSubclassProc(hwnd, msg, wparam, lparam),
         }
     }
 
-    /// Record where the frontend drew the maximise button, and make sure we are subclassed.
-    pub fn set_rect(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
+    /// Cut the caption buttons out of the region of Tauri's resize strip, so a press anywhere on a
+    /// button reaches the button. The strip keeps working everywhere else along the edges.
+    unsafe fn clear_buttons_from_resize_strip(hwnd: HWND) {
+        let Some(caption) = rects().lock().ok().and_then(|m| m.get(&(hwnd as isize)).copied())
+        else {
+            return;
+        };
+        let mut controls = caption.controls;
+        OffsetRect(&mut controls, client_width(hwnd) - caption.client_w, 0);
+        let class: Vec<u16> = "TAURI_DRAG_RESIZE_BORDERS\0".encode_utf16().collect();
+        let strip = FindWindowExW(hwnd, std::ptr::null_mut(), class.as_ptr(), std::ptr::null());
+        if strip.is_null() {
+            return; // resizing off, or not an undecorated window
+        }
+        // The strip sits at the client origin, so client coordinates are its own coordinates.
+        let region = CreateRectRgn(0, 0, 0, 0);
+        if GetWindowRgn(strip, region) == ERROR {
+            DeleteObject(region);
+            return;
+        }
+        let hole = CreateRectRgn(controls.left, controls.top, controls.right, controls.bottom);
+        CombineRgn(region, region, hole, RGN_DIFF);
+        DeleteObject(hole);
+        // On success the system owns `region`; only a failed call leaves it ours to free.
+        if SetWindowRgn(strip, region, 1) == 0 {
+            DeleteObject(region);
+        }
+    }
+
+    unsafe fn client_width(hwnd: HWND) -> i32 {
+        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        GetClientRect(hwnd, &mut r);
+        r.right - r.left
+    }
+
+    /// Record where the frontend drew the caption buttons, and make sure we are subclassed.
+    pub fn set_rects(hwnd: HWND, max: [i32; 4], controls: [i32; 4]) {
+        let rect = |[x, y, w, h]: [i32; 4]| RECT { left: x, top: y, right: x + w, bottom: y + h };
+        let client_w = unsafe { client_width(hwnd) };
         if let Ok(mut m) = rects().lock() {
             m.insert(
                 hwnd as isize,
-                RECT { left: x, top: y, right: x + w, bottom: y + h },
+                Caption { max: rect(max), controls: rect(controls), client_w },
             );
         }
-        unsafe { SetWindowSubclass(hwnd, Some(proc_), SUBCLASS_ID, 0) };
+        unsafe {
+            SetWindowSubclass(hwnd, Some(proc_), SUBCLASS_ID, 0);
+            // The strip already exists by now; don't wait for the next resize to clear it.
+            clear_buttons_from_resize_strip(hwnd);
+        }
     }
 
     /// Drop a closed window's rect so the map does not grow for the life of the process.
@@ -433,18 +503,19 @@ mod snap_layout {
     }
 }
 
-/// Report the maximise button's position, in physical pixels relative to the window's client area.
+/// Report where the caption buttons are, in physical pixels relative to the window's client area:
+/// `max` is the maximise button, `controls` the minimise/maximise/close group. Each is [x, y, w, h].
 ///
 /// Called by TitleBar.tsx whenever the caption is laid out or the window resized. Only Windows has
-/// anything to do with it; everywhere else the frontend button is the entire mechanism.
+/// anything to do with it; everywhere else the frontend buttons are the entire mechanism.
 #[tauri::command]
-fn set_caption_button_rect(window: tauri::WebviewWindow, x: i32, y: i32, w: i32, h: i32) {
+fn set_caption_button_rect(window: tauri::WebviewWindow, max: [i32; 4], controls: [i32; 4]) {
     #[cfg(windows)]
     if let Ok(hwnd) = window.hwnd() {
-        snap_layout::set_rect(hwnd.0 as _, x, y, w, h);
+        snap_layout::set_rects(hwnd.0 as _, max, controls);
     }
     #[cfg(not(windows))]
-    let _ = (window, x, y, w, h);
+    let _ = (window, max, controls);
 }
 
 /// Set the title bar background + text colours from RGB (called by the frontend per theme).

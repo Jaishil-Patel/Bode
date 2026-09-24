@@ -28,6 +28,17 @@ const newPageId = () =>
     ? crypto.randomUUID()
     : `p_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
+/**
+ * A pdf.js viewport for a page with `extra` rotation on top of its own /Rotate. Every layer that
+ * places things on a page — canvas, text, links, form fields — goes through this, so a turned page
+ * turns all of them together.
+ */
+export const rotatedViewport = <V>(
+  page: { rotate: number; getViewport: (p: { scale: number; rotation?: number }) => V },
+  scale: number,
+  extra: number = 0,
+): V => page.getViewport({ scale, rotation: (page.rotate + extra) % 360 });
+
 /** The identity manifest: every source page, in order, unrotated. */
 export const initialManifest = (numPages: number): PageRef[] =>
   Array.from({ length: numPages }, (_, i) => ({
@@ -62,6 +73,36 @@ export function movePages(
   const rest = pages.filter((p) => !ids.has(p.id));
   const at = Math.max(0, Math.min(toIndex - liftedAbove, rest.length));
   return [...rest.slice(0, at), ...moving, ...rest.slice(at)];
+}
+
+/** Move every page in `ids` one slot up (-1) or down (+1), as a block. */
+export function moveBy(pages: PageRef[], ids: ReadonlySet<string>, delta: -1 | 1): PageRef[] {
+  const at = pages.map((p, i) => (ids.has(p.id) ? i : -1)).filter((i) => i >= 0);
+  if (at.length === 0) return pages;
+  // Gap indexes: above the first selected page means one gap earlier; below the last, two gaps on
+  // (one to clear the page it is jumping over, and movePages counts the lifted pages itself).
+  const to = delta < 0 ? at[0] - 1 : at[at.length - 1] + 2;
+  if (to < 0 || to > pages.length) return pages;
+  return movePages(pages, ids, to);
+}
+
+/** Copy every page in `ids`, placing each copy straight after its original. */
+export function duplicateIds(pages: PageRef[], ids: ReadonlySet<string>): PageRef[] {
+  return pages.flatMap((p) => (ids.has(p.id) ? [p, { ...p, id: newPageId() }] : [p]));
+}
+
+/** Turn every page in `ids` by a quarter turn: 90 is clockwise, -90 counter-clockwise. */
+export function rotateIds(pages: PageRef[], ids: ReadonlySet<string>, delta: 90 | -90): PageRef[] {
+  return pages.map((p) =>
+    ids.has(p.id)
+      ? { ...p, rotation: (((p.rotation + delta) % 360) + 360) % 360 as PageRef["rotation"] }
+      : p
+  );
+}
+
+/** Only the pages in `ids`, in their current order — what "Extract" writes to a new file. */
+export function subsetManifest(pages: PageRef[], ids: ReadonlySet<string>): PageRef[] {
+  return pages.filter((p) => ids.has(p.id));
 }
 
 /**

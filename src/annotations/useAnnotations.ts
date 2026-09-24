@@ -1,6 +1,8 @@
 import { create } from "zustand";
-import { load, type Store } from "@tauri-apps/plugin-store";
+import { load } from "@tauri-apps/plugin-store";
+import { sharedStore } from "../platform/sharedStore";
 import { mergeAnnotationSets, pruneTombstones, type AnnotationSet } from "./merge";
+import type { PageRef } from "../pdf/pageOps";
 
 /*
  * Annotation geometry is stored in PDF points (the page size at scale 1.0) with a
@@ -292,7 +294,22 @@ interface AnnotationState {
   clearPage: (file: string, pageIndex: number) => void;
   /** Drop every annotation on a document, e.g. once a save has baked them into its pages. */
   clearFile: (file: string) => void;
-  remapPages: (file: string, map: ReadonlyMap<number, number>) => void;
+  /**
+   * Record a page edit (remove, reorder, duplicate, rotate) as one undo step, and carry this
+   * file's annotations through it. `before` is the page manifest as it was, so undo can put the
+   * pages back together with the annotations that sat on them.
+   */
+  recordPageEdit: (
+    file: string,
+    before: PageRef[],
+    map: ReadonlyMap<number, number>,
+    transform?: (a: Annotation, fromIndex: number) => Annotation,
+  ) => void;
+  /**
+   * Drop the page half of every history step for `file`. Used once the file on disk has been
+   * rewritten: a manifest from before then describes pages that no longer exist in that form.
+   */
+  forgetPageHistory: (file: string) => void;
   undo: () => void;
   redo: () => void;
 
@@ -313,14 +330,33 @@ interface AnnotationState {
 interface HistoryEntry {
   byFile: Record<string, Annotation[]>;
   deleted: Record<string, Record<string, number>>;
+  /** Set on a page edit: that document's page manifest at this point in history. */
+  pages?: { file: string; pages: PageRef[] };
 }
 
-const STORE_FILE = "annotations.json";
-const STATE_KEY = "state";
+/**
+ * How undo reaches the page manifests, which live in the viewer store. A bridge rather than an
+ * import because the viewer store already imports this one; it registers itself at startup.
+ */
+export interface PageBridge {
+  /** The current manifest for a document, or undefined if it is no longer open. */
+  get: (file: string) => PageRef[] | undefined;
+  /** Put a manifest back, without touching annotations — history restores those itself. */
+  restore: (file: string, pages: PageRef[]) => void;
+}
+let pageBridge: PageBridge | null = null;
+export const setPageBridge = (b: PageBridge) => {
+  pageBridge = b;
+};
 
-let storePromise: Promise<Store> | null = null;
-const getStore = () =>
-  (storePromise ??= load(STORE_FILE, { autoSave: false, defaults: {} }));
+/** The page half of the entry that undo or redo moves onto the opposite stack. */
+const currentPagesFor = (entry: HistoryEntry): HistoryEntry["pages"] => {
+  if (!entry.pages) return undefined;
+  const now = pageBridge?.get(entry.pages.file);
+  return now ? { file: entry.pages.file, pages: now } : undefined;
+};
+
+const STORE_FILE = "annotations.json";
 
 type Persisted = Pick<
   AnnotationState,
@@ -388,36 +424,11 @@ function migrateTombstones(
   return out;
 }
 
-function snapshot(s: AnnotationState): Persisted {
-  return {
-    byFile: s.byFile,
-    deleted: s.deleted,
-    color: s.color,
-    strokeWidth: s.strokeWidth,
-    markWeight: s.markWeight,
-    shapeKind: s.shapeKind,
-    fontSize: s.fontSize,
-    fillShapes: s.fillShapes,
-    fillOpacity: s.fillOpacity,
-    highlightPresets: s.highlightPresets,
-    signatureDataUrl: s.signatureDataUrl,
-  };
-}
-
-async function persist(get: () => AnnotationState) {
-  try {
-    const store = await getStore();
-    await store.set(STATE_KEY, snapshot(get()));
-    await store.save();
-  } catch {
-    // best-effort
-  }
-}
-
 const HISTORY_LIMIT = 100;
 
 export const useAnnotations = create<AnnotationState>((set, get) => {
-  const save = () => void persist(get);
+  // Writes only what changed; see `shared` below for the file and how windows stay in step.
+  const save = () => shared.persist();
 
   // Capture the current annotation map and tombstones as one undo step, and drop the redo stack.
   const pushHistory = () =>
@@ -467,34 +478,8 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     future: [],
 
     hydrate: async () => {
-      try {
-        const store = await getStore();
-        const saved = await store.get<Persisted>(STATE_KEY);
-        if (saved) {
-          set({
-            byFile: migrate(saved.byFile ?? {}),
-            deleted: migrateTombstones(saved.deleted ?? {}),
-            color: saved.color ?? "#ef4444",
-            strokeWidth: saved.strokeWidth ?? 2,
-            markWeight: saved.markWeight ?? DEFAULT_MARK_WEIGHT,
-            shapeKind: (SHAPE_KINDS as readonly string[]).includes(saved.shapeKind)
-              ? saved.shapeKind
-              : "rect",
-            fontSize: saved.fontSize ?? 16,
-            fillShapes: saved.fillShapes ?? false,
-            fillOpacity: saved.fillOpacity ?? 0.35,
-            highlightPresets:
-              saved.highlightPresets?.length === 3
-                ? saved.highlightPresets
-                : [...DEFAULT_PRESETS],
-            signatureDataUrl: saved.signatureDataUrl ?? null,
-          });
-        }
-      } catch {
-        /* defaults */
-      } finally {
-        set({ hydrated: true });
-      }
+      await shared.hydrate();
+      set({ hydrated: true });
     },
 
     setTool: (t) =>
@@ -700,11 +685,18 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
      * new visible page index map. Annotations on pages missing from the map are dropped with the
      * page. One history entry, so undo restores placement and removal together.
      */
-    remapPages: (file, map) => {
-      const list = get().byFile[file];
-      if (!list?.length) return; // nothing to move — don't spend an undo step
-      pushHistory();
+    recordPageEdit: (file, before, map, transform) => {
+      // Always a history step, even with no annotations to move: the page edit itself is undoable.
       coalesceKey = null;
+      set((st) => ({
+        past: [
+          ...st.past,
+          { byFile: st.byFile, deleted: st.deleted, pages: { file, pages: before } },
+        ].slice(-HISTORY_LIMIT),
+        future: [],
+      }));
+      const list = get().byFile[file];
+      if (!list?.length) return;
       const now = Date.now();
       set((st) => {
         const current = st.byFile[file] ?? [];
@@ -716,7 +708,9 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
             ...st.byFile,
             [file]: current.flatMap((a) => {
               const to = map.get(a.pageIndex);
-              return to === undefined ? [] : [{ ...a, pageIndex: to, updatedAt: now } as Annotation];
+              if (to === undefined) return [];
+              const moved = transform ? transform(a, a.pageIndex) : a;
+              return [{ ...moved, pageIndex: to, updatedAt: now } as Annotation];
             }),
           },
           deleted: tombstone(st.deleted, file, dropped, now),
@@ -724,38 +718,49 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       });
       save();
     },
+    forgetPageHistory: (file) => {
+      const strip = (e: HistoryEntry): HistoryEntry =>
+        e.pages?.file === file ? { byFile: e.byFile, deleted: e.deleted } : e;
+      set((st) => ({ past: st.past.map(strip), future: st.future.map(strip) }));
+    },
     undo: () => {
       coalesceKey = null;
       const { past } = get();
       if (past.length === 0) return;
+      const restoring = past[past.length - 1].pages;
       set((st) => {
         const entry = st.past[st.past.length - 1];
+        const mirror = { byFile: st.byFile, deleted: st.deleted, pages: currentPagesFor(entry) };
         return {
           byFile: entry.byFile,
           deleted: entry.deleted,
           past: st.past.slice(0, -1),
-          future: [{ byFile: st.byFile, deleted: st.deleted }, ...st.future].slice(0, HISTORY_LIMIT),
+          future: [mirror, ...st.future].slice(0, HISTORY_LIMIT),
           selectedId: null,
           editingId: null,
         };
       });
+      if (restoring) pageBridge?.restore(restoring.file, restoring.pages);
       save();
     },
     redo: () => {
       coalesceKey = null;
       const { future } = get();
       if (future.length === 0) return;
+      const restoring = future[0].pages;
       set((st) => {
         const entry = st.future[0];
+        const mirror = { byFile: st.byFile, deleted: st.deleted, pages: currentPagesFor(entry) };
         return {
           byFile: entry.byFile,
           deleted: entry.deleted,
           future: st.future.slice(1),
-          past: [...st.past, { byFile: st.byFile, deleted: st.deleted }].slice(-HISTORY_LIMIT),
+          past: [...st.past, mirror].slice(-HISTORY_LIMIT),
           selectedId: null,
           editingId: null,
         };
       });
+      if (restoring) pageBridge?.restore(restoring.file, restoring.pages);
       save();
     },
 
@@ -815,3 +820,58 @@ export const newId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `a_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+/*
+ * The annotations file, one key per field (see `platform/sharedStore.ts`). The documents' marks
+ * and their tombstones move together under one key — a mark and the record of its deletion must
+ * never be split across two writes — and each drawing preference is its own key, so a colour
+ * picked in one window reaches the others and is never written back over by a stale one.
+ */
+type Documents = Pick<Persisted, "byFile" | "deleted">;
+
+const annotationField = <K extends Exclude<keyof Persisted, "byFile" | "deleted">>(
+  key: K,
+  normalize: (v: Persisted[K]) => Persisted[K] = (v) => v,
+) => ({
+  read: () => useAnnotations.getState()[key],
+  apply: (v: Persisted[K]) =>
+    useAnnotations.setState({ [key]: normalize(v) } as Partial<AnnotationState>),
+});
+
+const shared = sharedStore({
+  open: () => load(STORE_FILE, { autoSave: false, defaults: {} }),
+  fields: {
+    documents: {
+      read: (): Documents => {
+        const s = useAnnotations.getState();
+        return { byFile: s.byFile, deleted: s.deleted };
+      },
+      apply: (v: Documents) =>
+        useAnnotations.setState({
+          byFile: migrate(v?.byFile ?? {}),
+          deleted: migrateTombstones(v?.deleted ?? {}),
+        }),
+    },
+    color: annotationField("color", (v) => v ?? "#ef4444"),
+    strokeWidth: annotationField("strokeWidth", (v) => v ?? 2),
+    markWeight: annotationField("markWeight", (v) => v ?? DEFAULT_MARK_WEIGHT),
+    shapeKind: annotationField("shapeKind", (v) =>
+      (SHAPE_KINDS as readonly string[]).includes(v) ? v : "rect",
+    ),
+    fontSize: annotationField("fontSize", (v) => v ?? 16),
+    fillShapes: annotationField("fillShapes", (v) => v ?? false),
+    fillOpacity: annotationField("fillOpacity", (v) => v ?? 0.35),
+    highlightPresets: annotationField("highlightPresets", (v) =>
+      v?.length === 3 ? v : [...DEFAULT_PRESETS],
+    ),
+    signatureDataUrl: annotationField("signatureDataUrl", (v) => v ?? null),
+  },
+  // Written by earlier versions: everything in one blob under "state".
+  legacy: {
+    key: "state",
+    split: ({ byFile, deleted, ...prefs }: Partial<Persisted>) => ({
+      documents: { byFile: byFile ?? {}, deleted: deleted ?? {} },
+      ...prefs,
+    }),
+  },
+});

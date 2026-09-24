@@ -1,26 +1,84 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import type { OutlineItem } from "../pdf/usePdfDocument";
 import { IconChevronRight } from "./icons";
 import PageThumb from "./PageThumb";
-import PageOrganizer from "./PageOrganizer";
+import PageMenu from "./PageMenu";
+import type { PageRef } from "../pdf/pageOps";
 
 const THUMB_WIDTH = 140;
+const LONG_PRESS_MS = 450;
 
-/** One page in the navigation rail. `pageNumber` is the visible position, `srcPage` what to draw. */
-function Thumb({ pageNumber, srcPage }: { pageNumber: number; srcPage: number }) {
+/**
+ * One page in the navigation rail. `pageNumber` is the visible position, `page.srcPage` what to draw.
+ * Right-click, or a long-press on touch, opens quick page actions.
+ */
+function Thumb({
+  pageNumber,
+  page,
+  onMenu,
+}: {
+  pageNumber: number;
+  page: PageRef;
+  onMenu: (id: string, x: number, y: number) => void;
+}) {
   const currentPage = useViewer((s) => s.currentPage);
   const goToPage = useViewer((s) => s.goToPage);
   const active = currentPage === pageNumber;
+  const hold = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
+  // Set when a long-press opened the menu, so the release that follows doesn't also navigate.
+  const held = useRef(false);
+  const touch = useRef(false);
+
+  const cancelHold = () => {
+    if (hold.current) clearTimeout(hold.current.timer);
+    hold.current = null;
+  };
 
   return (
     <button
-      onClick={() => goToPage(pageNumber)}
+      onClick={() => {
+        if (held.current) {
+          held.current = false;
+          return;
+        }
+        goToPage(pageNumber);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        cancelHold();
+        // Touch browsers fire this for a long-press too; the finger lifting must not then navigate.
+        if (touch.current) held.current = true;
+        onMenu(page.id, e.clientX, e.clientY);
+      }}
+      onPointerDown={(e) => {
+        held.current = false;
+        touch.current = e.pointerType !== "mouse";
+        if (!touch.current) return; // a mouse has a right button for this
+        const { clientX: x, clientY: y } = e;
+        hold.current = {
+          x,
+          y,
+          timer: setTimeout(() => {
+            held.current = true;
+            hold.current = null;
+            navigator.vibrate?.(10);
+            onMenu(page.id, x, y);
+          }, LONG_PRESS_MS),
+        };
+      }}
+      onPointerMove={(e) => {
+        const h = hold.current;
+        if (h && Math.hypot(e.clientX - h.x, e.clientY - h.y) > 8) cancelHold(); // a scroll
+      }}
+      onPointerUp={cancelHold}
+      onPointerCancel={cancelHold}
       className="flex flex-col items-center gap-1 outline-none"
     >
       <PageThumb
-        srcPage={srcPage}
+        srcPage={page.srcPage}
+        rotation={page.rotation}
         width={THUMB_WIDTH}
         className={`border-2 ${active ? "border-accent" : "border-transparent"}`}
       />
@@ -69,20 +127,11 @@ function OutlineNode({ node, depth }: { node: OutlineItem; depth: number }) {
 
 export default function Sidebar() {
   const { pages, outline } = useViewer();
-  const organizeOpen = useViewer((s) => s.organizeOpen);
-  const doc = useViewer((s) => s.doc);
   const { layout, updateLayout } = useSettings();
   const tab = layout.sidebarTab;
-
-  // Organize mode takes over the whole rail: it needs the width, and mixing selection checkboxes
-  // into the navigation list would make a plain click ambiguous.
-  if (organizeOpen && doc) {
-    return (
-      <div className="glass no-select relative z-30 flex h-full w-56 flex-col border-r border-border bg-surface">
-        <PageOrganizer />
-      </div>
-    );
-  }
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const openMenu = useCallback((id: string, x: number, y: number) => setMenu({ id, x, y }), []);
+  const closeMenu = useCallback(() => setMenu(null), []);
 
   return (
     <div className="glass no-select relative z-30 flex h-full w-56 flex-col border-r border-border bg-surface">
@@ -104,7 +153,7 @@ export default function Sidebar() {
         {tab === "thumbnails" ? (
           <div className="flex flex-col items-center gap-3">
             {pages.map((p, i) => (
-              <Thumb key={p.id} pageNumber={i + 1} srcPage={p.srcPage} />
+              <Thumb key={p.id} pageNumber={i + 1} page={p} onMenu={openMenu} />
             ))}
           </div>
         ) : outline.length ? (
@@ -113,6 +162,7 @@ export default function Sidebar() {
           <p className="px-1 py-4 text-center text-xs text-muted">No outline in this document.</p>
         )}
       </div>
+      {menu && <PageMenu pageId={menu.id} at={{ x: menu.x, y: menu.y }} onClose={closeMenu} />}
     </div>
   );
 }
