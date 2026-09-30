@@ -215,7 +215,9 @@ export default function ToolbarCustomizer() {
           else cards.current.delete(t.id);
         }}
         className={`flex select-none flex-col items-center rounded-lg border transition-colors ${
-          on ? "tint-accent border-transparent text-text" : "border-dashed border-border text-muted"
+          on
+            ? "tint-accent selected-glow border-transparent text-text"
+            : "border-dashed border-border text-muted"
         } ${dragging ? "opacity-60 ring-1 ring-accent" : ""}`}
       >
         <button

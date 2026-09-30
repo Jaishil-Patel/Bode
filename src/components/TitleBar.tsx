@@ -19,13 +19,15 @@
  *     hit-test with HTMAXBUTTON, which is `set_caption_button_rect` in lib.rs — this component's
  *     job is only to report where the button ended up.
  *   - clicks on the buttons themselves: Tauri's resize strip runs along the top edge, over the
- *     buttons, and would take a press in their top few pixels. lib.rs cuts the buttons out of it,
- *     which is why the whole group's rect is reported too.
+ *     buttons, and would take a press in their top few pixels; tao's top resize band does the
+ *     same. lib.rs keeps both off the buttons all the way to the window's edge, which is why
+ *     every button's rect, and the whole group's, is reported.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { isAndroid } from "../platform/files";
+import { useSettings } from "../settings/useSettings";
 
 /* Windows draws its caption glyphs from Segoe MDL2 at 10px. These are the same shapes as paths, so
    the bar does not depend on a font that only exists on one OS. */
@@ -67,7 +69,10 @@ function currentWindow() {
 
 export default function TitleBar() {
   const [maximised, setMaximised] = useState(false);
+  const titleBarSize = useSettings((s) => s.layout.titleBarSize);
+  const minBtn = useRef<HTMLButtonElement>(null);
   const maxBtn = useRef<HTMLButtonElement>(null);
+  const closeBtn = useRef<HTMLButtonElement>(null);
   const controls = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -86,8 +91,9 @@ export default function TitleBar() {
   }, []);
 
   /*
-   * Tell Rust where the buttons are, in physical pixels relative to the window: the maximise button
-   * for Snap Layouts, and the whole group so it can be kept clear of the resize strip.
+   * Tell Rust where the buttons are, in physical pixels relative to the window: each button, so a
+   * press the window itself receives over one can be answered as that button (and the maximise one
+   * for Snap Layouts), and the whole group so it can be kept clear of the resize strip.
    *
    * Snap Layouts is not something a web page can offer: Windows shows the flyout when the window
    * itself reports the cursor is over its maximise button, which is a WM_NCHITTEST answer. Rust
@@ -95,14 +101,17 @@ export default function TitleBar() {
    * hence the round trip. Re-measured on resize because the button is pinned to the right edge.
    */
   const reportRect = useCallback(() => {
-    if (isAndroid() || !maxBtn.current || !controls.current) return;
+    if (isAndroid() || !minBtn.current || !maxBtn.current || !closeBtn.current || !controls.current)
+      return;
     const s = window.devicePixelRatio || 1;
     const px = (el: HTMLElement) => {
       const r = el.getBoundingClientRect();
       return [r.left, r.top, r.width, r.height].map((v) => Math.round(v * s));
     };
     invoke("set_caption_button_rect", {
+      min: px(minBtn.current),
       max: px(maxBtn.current),
+      close: px(closeBtn.current),
       controls: px(controls.current),
     }).catch(() => {
       // Not Windows, or the command is unavailable: the button still works, just without the flyout.
@@ -113,15 +122,22 @@ export default function TitleBar() {
     reportRect();
     window.addEventListener("resize", reportRect);
     return () => window.removeEventListener("resize", reportRect);
-  }, [reportRect, maximised]);
+    // Re-measured when the bar changes height, too: the buttons' rects change with it.
+  }, [reportRect, maximised, titleBarSize]);
 
   if (isAndroid()) return null;
 
   const win = currentWindow();
   // 46x32 per button is the Windows caption metric; matching it is what stops the bar reading as a
   // web imitation of a title bar rather than as the title bar.
+  //
+  // `no-press` opts out of the app-wide press effect, which shrinks a held button to 88%. A click
+  // only counts if the release lands on the button too, and shrinking pulled each edge in by a few
+  // pixels — so a press on the outer edge was released over the bar instead and did nothing. These
+  // sit against the top and right of the window, which is exactly where a flick of the mouse lands,
+  // and a real caption button does not shrink either.
   const btn =
-    "flex h-8 w-[46px] shrink-0 items-center justify-center text-text/80 transition-colors hover:bg-surface-2 hover:text-text";
+    "no-press flex h-[var(--caption-h)] w-[46px] shrink-0 items-center justify-center text-text/80 transition-colors hover:bg-surface-2 hover:text-text";
 
   return (
     /*
@@ -130,7 +146,7 @@ export default function TitleBar() {
      * and that discontinuity along the shared border is exactly the seam this bar is meant not to
      * have. One filter over both, and there is nothing to line up.
      */
-    <div data-tauri-drag-region className="no-select relative flex h-8 shrink-0 items-center">
+    <div data-tauri-drag-region className="no-select relative flex h-[var(--caption-h)] shrink-0 items-center">
       {/* The identity is the app's, not the document's — the tab strip and the toolbar already say
           which file is open, and a caption that renames itself is the thing you cannot aim at.
           A drag region like the rest of the bar: on Windows everything but the buttons drags. */}
@@ -145,7 +161,7 @@ export default function TitleBar() {
         <span className="truncate text-xs font-medium text-muted">Bode</span>
       </div>
       <div ref={controls} className="flex shrink-0">
-        <button className={btn} title="Minimise" onClick={() => void win?.minimize()}>
+        <button ref={minBtn} className={btn} title="Minimise" onClick={() => void win?.minimize()}>
           <IconMinimise />
         </button>
         <button
@@ -157,6 +173,7 @@ export default function TitleBar() {
           {maximised ? <IconRestore /> : <IconMaximise />}
         </button>
         <button
+          ref={closeBtn}
           className={`${btn} hover:!bg-[#c42b1c] hover:!text-white`}
           title="Close"
           onClick={() => void win?.close()}

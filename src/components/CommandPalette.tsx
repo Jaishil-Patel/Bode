@@ -6,6 +6,7 @@ import { BUILT_IN_THEMES } from "../settings/themes";
 import { isRemote } from "../platform/docId";
 import { TOOLS } from "../annotations/tools";
 import { useAnnotations } from "../annotations/useAnnotations";
+import { addNoteToCurrentDoc } from "../notes/NoteLayer";
 
 interface Command {
   id: string;
@@ -57,6 +58,10 @@ export default function CommandPalette({
     // Sending needs something to send, and a document on another device is already there.
     if (viewer.filePath && !isRemote(viewer.filePath)) {
       cmds.push({ id: "send", label: "Send this document to a device…", run: onOpenDevices });
+    }
+    // Notes work on every kind of document, so they sit outside the PDF-only block below.
+    if (viewer.filePath) {
+      cmds.push({ id: "note", label: "New sticky note", hint: "Ctrl+Shift+N", run: addNoteToCurrentDoc });
     }
     // Page editing and the annotation tools only apply to PDFs.
     if (viewer.doc) {

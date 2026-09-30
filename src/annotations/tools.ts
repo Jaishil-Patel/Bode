@@ -20,6 +20,7 @@ import {
   IconForm,
   IconHighlight,
   IconPen,
+  IconNote,
   IconPin,
   IconShapes,
   IconSignature,
@@ -99,6 +100,13 @@ export const TOOLS: readonly ToolDef[] = [
     title: "Pin a region (N) — drag round a figure to keep it on screen while you read",
     key: "n",
     Icon: IconPin,
+  },
+  {
+    id: "note",
+    name: "Note",
+    title: "Sticky note (M) — click where it should go",
+    key: "m",
+    Icon: IconNote,
   },
 ];
 

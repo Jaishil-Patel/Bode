@@ -108,6 +108,16 @@ export const IconPin = (p: P) =>
     </>,
     p.className,
   );
+// A sheet with its bottom-right corner turned up: a sticky note.
+export const IconNote = (p: P) =>
+  svg(
+    <>
+      <path d="M5 4h14a1 1 0 0 1 1 1v9l-6 6H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+      <path d="M20 14h-5a1 1 0 0 0-1 1v5" />
+      <path d="M8 9h8M8 12.5h5" />
+    </>,
+    p.className,
+  );
 export const IconTriangle = (p: P) => svg(<path d="M12 4 21 20H3z" />, p.className);
 export const IconLine = (p: P) => svg(<path d="M4 20 20 4" />, p.className);
 export const IconArrow = (p: P) =>

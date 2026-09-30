@@ -24,6 +24,7 @@ import { useSettings } from "../settings/useSettings";
 import TextSelectLayer from "./TextSelectLayer";
 import { useTextSelection } from "./useTextSelection";
 import { usePortals } from "../portals/usePortals";
+import { useNotes } from "../notes/useNotes";
 import { pageGeom, rangeRects } from "../pdf/textGeometry";
 
 const EMPTY: Annotation[] = [];
@@ -242,6 +243,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     tool === "pen" ||
     tool === "signature" ||
     tool === "pin" ||
+    tool === "note" ||
     tool === "eraser";
 
   const toPdf = (e: React.PointerEvent) => {
@@ -274,6 +276,14 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
       (e.target as Element).setPointerCapture?.(e.pointerId);
       erasing.current = true;
       eraseAt(p); // erase on the initial click; keep erasing as the pointer drags
+      return;
+    }
+
+    // A note is pinned to the window, not the page, so it is dropped at the pointer in screen
+    // terms. Back to select afterwards, as for a text box: the next thing you do is type in it.
+    if (tool === "note") {
+      useNotes.getState().add(docKey, { x: e.clientX, y: e.clientY });
+      setTool("select");
       return;
     }
 
@@ -391,6 +401,10 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
     const commit = () => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+      // Text selected in a sticky note floating over the page is the note's to highlight, not
+      // the page's: the note may well be sitting right on top of this page.
+      const anchor = sel.anchorNode instanceof Element ? sel.anchorNode : sel.anchorNode?.parentElement;
+      if (anchor?.closest("[contenteditable]")) return;
       const pageRect = ref.current?.getBoundingClientRect();
       if (!pageRect) return;
       const rects: Rect[] = [];
@@ -977,7 +991,7 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
   return (
     <div
       ref={ref}
-      className={`absolute inset-0 ${tool === "eraser" ? "cursor-eraser" : ""}`}
+      className={`absolute inset-0 ${tool === "eraser" ? "cursor-eraser" : tool === "note" ? "cursor-note" : ""}`}
       style={{
         width,
         height,
@@ -994,9 +1008,10 @@ export default function AnnotationLayer({ filePath, pageIndex, scale, width, hei
         // TextSelectLayer's surface is deliberately portalled outside this element so that
         // intersection cannot reach it and stop a swipe from scrolling the page.
         touchAction: "none",
-        // The eraser gets a real eraser-shaped cursor (via .cursor-eraser); other drawing tools
-        // use a crosshair. Leave cursor unset for the eraser so the class takes effect.
-        cursor: tool === "eraser" ? undefined : captureTool ? "crosshair" : "default",
+        // The eraser and the note tool get cursors shaped like what they do (.cursor-eraser,
+        // .cursor-note); other drawing tools use a crosshair. Left unset for those two so the class
+        // takes effect.
+        cursor: tool === "eraser" || tool === "note" ? undefined : captureTool ? "crosshair" : "default",
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

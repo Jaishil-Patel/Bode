@@ -12,6 +12,7 @@ import type { PdfDocument } from "../pdf/pdfWorker";
 import { rotatedViewport } from "../pdf/pageOps";
 import { IconClose, IconChevronDown, IconChevronRight } from "../components/icons";
 import { INVERT_FILTER, usePageInverted } from "../settings/usePageColors";
+import { contentTop } from "../platform/contentTop";
 import { PORTAL_Z_BASE, PORTAL_Z_TOP, TITLE_H, usePortals, type Portal } from "./usePortals";
 
 /**
@@ -126,7 +127,8 @@ export default function PortalPane({
       if (mode === "move") {
         update(docKey, portal.id, {
           x: Math.min(Math.max(0, from.x + dx), window.innerWidth - 60),
-          y: Math.min(Math.max(0, from.y + dy), window.innerHeight - TITLE_H),
+          // Stops at the bars across the top rather than sliding in underneath them.
+          y: Math.min(Math.max(contentTop(), from.y + dy), window.innerHeight - TITLE_H),
         });
       } else {
         update(docKey, portal.id, {

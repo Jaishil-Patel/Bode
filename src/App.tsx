@@ -1,8 +1,9 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { publishContentTop } from "./platform/contentTop";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useViewer } from "./store/viewerStore";
-import { useSettings } from "./settings/useSettings";
+import { TITLE_BAR_PX, useSettings } from "./settings/useSettings";
 import { useFullscreen } from "./store/fullscreenStore";
 import { useAnnotations } from "./annotations/useAnnotations";
 import { toolForKey } from "./annotations/tools";
@@ -11,9 +12,12 @@ import Toolbar from "./components/Toolbar";
 import TabBar from "./components/TabBar";
 import AnnotationTools from "./components/AnnotationBar";
 import PortalLayer from "./portals/PortalLayer";
+import NoteLayer, { addNoteToCurrentDoc } from "./notes/NoteLayer";
+import { useNotes } from "./notes/useNotes";
 import Sidebar from "./components/Sidebar";
 import SearchBar from "./components/SearchBar";
 import CommandPalette from "./components/CommandPalette";
+import TabSwitcher from "./components/TabSwitcher";
 import SignaturePad from "./components/SignaturePad";
 import PasswordPrompt from "./components/PasswordPrompt";
 import SettingsPanel from "./settings/SettingsPanel";
@@ -216,6 +220,7 @@ export default function App() {
     hydrate();
     useAnnotations.getState().hydrate();
     useFormValues.getState().hydrate();
+    useNotes.getState().hydrate();
     // A window spawned for the "separate windows" open mode carries its file in the URL;
     // otherwise ask the backend for any file-association / "Open with" launch path.
     const fileParam = new URLSearchParams(window.location.search).get("file");
@@ -257,7 +262,11 @@ export default function App() {
       const mod = e.ctrlKey || e.metaKey;
       const target = e.target as HTMLElement;
       const typing =
-        target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        // A sticky note is a rich text box: its keys are letters, not tool shortcuts.
+        target.isContentEditable;
 
       // F11 is unambiguous — nothing else wants it — so it toggles fullscreen from anywhere.
       // Pressed inside an HTML frame it never reaches this listener; HtmlView handles that case.
@@ -293,7 +302,11 @@ export default function App() {
         return;
       }
 
-      if (mod && e.key.toLowerCase() === "k") {
+      if (mod && e.shiftKey && e.key.toLowerCase() === "n") {
+        // Checked before the plain Ctrl shortcuts: none of them wants Shift, but order makes sure.
+        e.preventDefault();
+        addNoteToCurrentDoc();
+      } else if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
       } else if (mod && e.key.toLowerCase() === "o") {
@@ -422,6 +435,10 @@ export default function App() {
   // Glass restyles itself when the pages go dark; this is what tells it they have.
   usePageColorsAttribute();
 
+  // Where the document area starts, for everything that floats over it: see platform/contentTop.
+  const contentRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => (contentRef.current ? publishContentTop(contentRef.current) : undefined), []);
+
   const organizing = useViewer((s) => s.organizeOpen) && !!doc;
   const showSidebar = doc && layout.sidebarOpen && !fullscreen && !organizing;
 
@@ -429,7 +446,18 @@ export default function App() {
     /* --caption-h keeps the modal overlays clear of our caption; see `.below-caption`. */
     <div
       className="flex h-full flex-col bg-bg"
-      style={{ "--caption-h": fullscreen ? "0px" : "2rem" } as CSSProperties}
+      // The caption's height, from the "Title bar size" setting. TitleBar sizes itself from this
+      // too, so the bar and everything kept clear of it can never disagree.
+      style={
+        {
+          // Android draws no caption of ours, and keeps the 2rem it always had here.
+          "--caption-h": fullscreen
+            ? "0px"
+            : isAndroid()
+              ? "2rem"
+              : `${TITLE_BAR_PX[layout.titleBarSize] ?? 32}px`,
+        } as CSSProperties
+      }
     >
       {/* A filter definition only, drawing nothing. The Glass theme's chrome refracts through it. */}
       <GlassFilter />
@@ -466,10 +494,15 @@ export default function App() {
           scrolling the document — or scrolling its own page out of the render window — must
           neither move it nor take it away. */}
       {doc && !organizing && <PortalLayer />}
+      {/* Sticky notes: the same pinned-to-the-window panes, for every kind of document. */}
+      {!organizing && <NoteLayer />}
       {/* A phone has no F11 and no Escape, so it gets a button instead of advice about keys. */}
       {fullscreen && (isAndroid() ? <FullscreenExitButton /> : <FullscreenHint />)}
 
-      <div className={`flex min-h-0 flex-1 ${layout.sidebarSide === "right" ? "flex-row-reverse" : ""}`}>
+      <div
+        ref={contentRef}
+        className={`flex min-h-0 flex-1 ${layout.sidebarSide === "right" ? "flex-row-reverse" : ""}`}
+      >
         {showSidebar && <Sidebar />}
         <main className="relative min-w-0 flex-1">
           {error && (
@@ -508,6 +541,7 @@ export default function App() {
       {devicesOpen && <DevicesDrawer onClose={() => setDevicesOpen(false)} />}
       <SignaturePad />
       <PasswordPrompt />
+      <TabSwitcher />
     </div>
   );
 }

@@ -56,6 +56,7 @@ export default function TabBar() {
   const moveTab = useViewer((s) => s.moveTab);
   // A tab whose form has answers that have not been written out to a PDF yet.
   const docKeyFor = useSettings((s) => s.docKey);
+  const tabBarSize = useSettings((s) => s.layout.tabBarSize);
   const formsByFile = useFormValues((s) => s.byFile);
   const formsSavedAt = useFormValues((s) => s.savedAt);
   const hasUnsavedForm = (path: string) => {
@@ -220,7 +221,9 @@ export default function TabBar() {
       ref={barRef}
       // `glass-flat`: the strip scrolls horizontally once there are more tabs than fit, and the
       // theme's refraction layer would scroll away with them. See the note in themes.css.
-      className="glass glass-flat no-select relative z-30 flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1"
+      // Sized by the "Tab bar size" setting; the variables it sets are in index.css.
+      data-tabbar-size={tabBarSize ?? "comfortable"}
+      className="glass glass-flat no-select relative z-30 flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-[var(--tabbar-py)]"
     >
       {markerX !== null && (
         <div
@@ -246,7 +249,7 @@ export default function TabBar() {
               }
             }}
             title={t.filePath}
-            className={`group flex max-w-[200px] shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm ${
+            className={`group flex max-w-[200px] shrink-0 items-center gap-1.5 rounded-md px-3 py-[var(--tab-py)] text-[length:var(--tab-font)] leading-[var(--tab-line)] ${
               isDragged ? "cursor-grabbing" : "cursor-pointer transition-colors"
             } ${active ? "bg-surface-2 text-text" : "text-muted hover:bg-surface-2/60"}`}
             style={isDragged ? dragStyle() : undefined}

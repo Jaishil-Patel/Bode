@@ -52,7 +52,30 @@ export interface LayoutSettings {
    * the explicit settings are for anyone who disagrees in either direction.
    */
   pageColors: "normal" | "auto" | "inverted";
+  /**
+   * How tall the top bar (page count, zoom, find, save…) is. Only the bar's own metrics change —
+   * button, icon and text size — never what is on it. See `[data-toolbar-size]` in index.css.
+   */
+  toolbarSize: ToolbarSize;
+  /** How tall our window caption (logo, minimise, maximise, close) is. See `TITLE_BAR_PX`. */
+  titleBarSize: TitleBarSize;
+  /** How tall the tab strip shown with more than one document open is. See `[data-tabbar-size]`. */
+  tabBarSize: ToolbarSize;
 }
+
+export type ToolbarSize = "comfortable" | "compact" | "slim" | "minimal";
+export type TitleBarSize = "standard" | "compact" | "slim" | "minimal";
+
+/**
+ * Caption heights in CSS px. "standard" is Windows' own 32px; the buttons keep Windows' 46px width
+ * at every height, so they stay as easy to hit side to side however short the bar gets.
+ */
+export const TITLE_BAR_PX: Record<TitleBarSize, number> = {
+  standard: 32,
+  compact: 28,
+  slim: 24,
+  minimal: 20,
+};
 
 interface SettingsState {
   hydrated: boolean;
@@ -105,6 +128,12 @@ interface SettingsState {
   docKey: (path: string) => string;
 }
 
+/*
+ * Inlined rather than imported from platform/files, which pulls in the devices store — and that
+ * reads this one, so the import would be circular.
+ */
+const onPhone = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+
 const DEFAULT_LAYOUT: LayoutSettings = {
   continuous: true,
   pageGap: 16,
@@ -117,6 +146,14 @@ const DEFAULT_LAYOUT: LayoutSettings = {
   toolsHidden: [],
   removePasswordOnSave: false,
   pageColors: "auto",
+  /*
+   * Thinner bars on the desktop, where a mouse can hit a 28px button without trouble. A phone keeps
+   * the roomy ones: its buttons are for fingers, and 36px is already the smallest that works. The
+   * setting is there on both; only where it starts differs. (The title bar is desktop-only.)
+   */
+  toolbarSize: onPhone ? "comfortable" : "slim",
+  titleBarSize: "compact",
+  tabBarSize: onPhone ? "comfortable" : "compact",
 };
 
 const STORE_FILE = "settings.json";

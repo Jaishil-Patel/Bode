@@ -38,9 +38,20 @@ export default function HtmlView() {
       if (!doc) return;
 
       // Keys pressed while the frame has focus never reach the app window on their own. Forward
-      // the fullscreen ones so F11 works no matter where the user last clicked.
+      // the fullscreen ones so F11 works no matter where the user last clicked, and the tab
+      // switcher's (Ctrl+Tab, and the Ctrl release that finishes it) so it does too.
+      const forward = (ev: KeyboardEvent) =>
+        window.dispatchEvent(
+          new KeyboardEvent(ev.type, { key: ev.key, ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey }),
+        );
       doc.addEventListener("keydown", (ev) => {
-        if (handleFullscreenKey(ev.key)) ev.preventDefault();
+        if (ev.key === "Tab" && ev.ctrlKey) {
+          ev.preventDefault();
+          forward(ev);
+        } else if (handleFullscreenKey(ev.key)) ev.preventDefault();
+      });
+      doc.addEventListener("keyup", (ev) => {
+        if (ev.key === "Control") forward(ev);
       });
 
       doc.addEventListener("click", (ev) => {

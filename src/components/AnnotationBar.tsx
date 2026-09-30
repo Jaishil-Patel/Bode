@@ -44,11 +44,13 @@ const ACTIVE_BG = "color-mix(in srgb, var(--accent-ink) 22%, transparent)";
 /*
  * The highlighter palette.
  *
- * Curated pastels rather than a raw colour wheel: a highlight has to sit under black text and
- * stay readable, which rules out most of the spectrum, so offering all of it is a worse tool than
- * offering the dozen that work. The native picker is still one tap away for anything else.
+ * Curated rather than a raw colour wheel: a highlight has to sit under black text and stay
+ * readable, which rules out most of the spectrum, so offering all of it is a worse tool than
+ * offering the ones that work. A row of bright marker colours — the defaults among them — then
+ * the softer tints. The native picker is still one tap away for anything else.
  */
 const HIGHLIGHT_PALETTE = [
+  "#ffe135", "#5cf28c", "#4fc3ff", "#ff6fb5",
   "#fff59d", "#ffe0a3", "#ffd0a3", "#ffc9c9",
   "#ffb3d9", "#e5c9ff", "#c7d2fe", "#a8dfff",
   "#a7f3d0", "#d9f99d", "#cfe8d4", "#dcdfe4",
@@ -479,15 +481,25 @@ function startToolsDrag(
   window.addEventListener("pointercancel", cancel);
 }
 
-/** Where the bar — or its minimised button — sits for a given edge, centred along that edge. */
+/*
+ * Where the bar — or its minimised button — sits for a given edge, centred along that edge.
+ *
+ * Measured from the document area rather than the window: the bars across the top change height
+ * with their size settings and the tab strip, and a bar placed by a fixed offset from the window's
+ * top ended up on top of them. `--content-top` is where they end (see platform/contentTop).
+ */
+const CONTENT_TOP = "var(--content-top, 0px)";
 const toolsPos = (side: Side): React.CSSProperties =>
   side === "bottom"
     ? { bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)", left: "50%", transform: "translateX(-50%)" }
     : side === "top"
-    ? { top: "calc(env(safe-area-inset-top) + 3.5rem)", left: "50%", transform: "translateX(-50%)" }
-    : side === "left"
-    ? { left: "0.75rem", top: "50%", transform: "translateY(-50%)" }
-    : { right: "0.75rem", top: "50%", transform: "translateY(-50%)" };
+    ? { top: `calc(${CONTENT_TOP} + 0.75rem)`, left: "50%", transform: "translateX(-50%)" }
+    : // Centred in the document area, not the window, for the same reason.
+      {
+        [side === "left" ? "left" : "right"]: "0.75rem",
+        top: `calc((100vh + ${CONTENT_TOP}) / 2)`,
+        transform: "translateY(-50%)",
+      };
 
 /*
  * The bar's own glass, which predates the Glass theme and still has to work in all the others.
@@ -936,7 +948,7 @@ function ToolsBar({ open }: { open: boolean }) {
   // own scroll container when it holds more tools than fit — see the note in themes.css. The pill
   // and the minimised button are not scrollers, so they keep the full effect.
   const containerCls = vertical
-    ? `no-select no-scrollbar glass-flat flex max-h-[calc(100vh-2rem)] flex-col items-center gap-1 overflow-y-auto px-1.5 py-2.5 ${glass}`
+    ? `no-select no-scrollbar glass-flat flex max-h-[calc(100vh-var(--content-top,0px)-1.5rem)] flex-col items-center gap-1 overflow-y-auto px-1.5 py-2.5 ${glass}`
     : `no-select no-scrollbar glass-flat flex max-w-[calc(100vw-1rem)] items-center gap-1 overflow-x-auto px-2.5 py-1.5 ${glass}`;
 
   // The tool-options pill (colour/thickness/fill) floats just off the bar's page-facing side. It

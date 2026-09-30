@@ -12,6 +12,7 @@
  */
 import { create } from "zustand";
 import type { Rect } from "../annotations/useAnnotations";
+import { contentTop } from "../platform/contentTop";
 
 export interface Portal {
   id: string;
@@ -72,7 +73,9 @@ export const usePortals = create<State>((set, get) => ({
     const { w, h } = paneSize(rect);
     // Clamp on open so a pane dragged from the far edge of a page cannot appear off-screen.
     const x = Math.min(Math.max(8, at.x), Math.max(8, window.innerWidth - w - 8));
-    const y = Math.min(Math.max(8, at.y), Math.max(8, window.innerHeight - h - 8));
+    // Below the bars across the top, never under them.
+    const top = contentTop() + 8;
+    const y = Math.min(Math.max(top, at.y), Math.max(top, window.innerHeight - h - 8));
     const portal: Portal = {
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       pageIndex,

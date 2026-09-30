@@ -31,6 +31,8 @@ export type Tool =
   | "signature"
   | "form"
   | "pin"
+  /** Drops a sticky note where you click. The note itself lives in `notes/useNotes`, not here. */
+  | "note"
   | "eraser";
 
 interface Base {
@@ -377,7 +379,24 @@ type Persisted = Pick<
 // and on export), which darkens rather than covers. Multiply is what keeps the glyphs underneath
 // crisp — black text times any color is still black — but it also means a saturated mid-tone would
 // dim the whole page. Acrobat and pdf.js pick pastels for the same reason.
-const DEFAULT_PRESETS = ["#fff59d", "#a7f3d0", "#a8dfff"]; // yellow, green, blue
+/*
+ * Marker colours, not pastels. Highlights are drawn at full strength and multiplied into the page,
+ * so black text stays black through any of these; pastels multiplied onto white paper just look
+ * washed out.
+ */
+const DEFAULT_PRESETS = ["#ffe135", "#5cf28c", "#4fc3ff"]; // yellow, green, blue
+
+/**
+ * The defaults before they were brightened. A saved preset still on one of these, in its own
+ * slot, was never chosen — it is just the old default — so it moves to the new one. Anything the
+ * reader picked themselves is left alone.
+ */
+const OLD_DEFAULT_PRESETS = ["#fff59d", "#a7f3d0", "#a8dfff"];
+
+export function upgradePresets(saved: string[] | undefined): string[] {
+  if (saved?.length !== 3) return [...DEFAULT_PRESETS];
+  return saved.map((c, i) => (c.toLowerCase() === OLD_DEFAULT_PRESETS[i] ? DEFAULT_PRESETS[i] : c));
+}
 
 // Full strength: with multiply doing the tinting, alpha would only mute the marker.
 export const HIGHLIGHT_OPACITY = 1;
@@ -861,9 +880,7 @@ const shared = sharedStore({
     fontSize: annotationField("fontSize", (v) => v ?? 16),
     fillShapes: annotationField("fillShapes", (v) => v ?? false),
     fillOpacity: annotationField("fillOpacity", (v) => v ?? 0.35),
-    highlightPresets: annotationField("highlightPresets", (v) =>
-      v?.length === 3 ? v : [...DEFAULT_PRESETS],
-    ),
+    highlightPresets: annotationField("highlightPresets", upgradePresets),
     signatureDataUrl: annotationField("signatureDataUrl", (v) => v ?? null),
   },
   // Written by earlier versions: everything in one blob under "state".

@@ -84,6 +84,7 @@ const SHORTCUTS: { group: string; items: [string, string][] }[] = [
       ["Reset zoom", "Ctrl+0"],
       ["Fullscreen", "F11"],
       ["Close overlay / exit fullscreen", "Esc"],
+      ["New sticky note", "Ctrl+Shift+N"],
     ],
   },
   {
@@ -91,6 +92,7 @@ const SHORTCUTS: { group: string; items: [string, string][] }[] = [
     items: [
       ["Find", "Ctrl+F"],
       ["Command palette", "Ctrl+K"],
+      ["Last used tab (hold Ctrl to go further back)", "Ctrl+Tab"],
       ["Next / previous page", "PageDn / PageUp"],
     ],
   },
@@ -278,6 +280,48 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 { value: "right", label: "Right" },
               ]}
               onChange={(v) => updateLayout({ sidebarSide: v })}
+            />
+          </Row>
+          {/* A phone has no title bar of ours — the system draws its status bar there. */}
+          {!isAndroid() && (
+            <Row label="Title bar size" description="How tall the strip with the window buttons is.">
+              <Segmented
+                label="Title bar size"
+                value={layout.titleBarSize}
+                options={[
+                  { value: "standard", label: "Standard" },
+                  { value: "compact", label: "Compact" },
+                  { value: "slim", label: "Slim" },
+                  { value: "minimal", label: "Minimal" },
+                ]}
+                onChange={(v) => updateLayout({ titleBarSize: v })}
+              />
+            </Row>
+          )}
+          <Row label="Top bar size" description="How tall the bar with the page count, zoom and find is.">
+            <Segmented
+              label="Top bar size"
+              value={layout.toolbarSize}
+              options={[
+                { value: "comfortable", label: "Roomy" },
+                { value: "compact", label: "Compact" },
+                { value: "slim", label: "Slim" },
+                { value: "minimal", label: "Minimal" },
+              ]}
+              onChange={(v) => updateLayout({ toolbarSize: v })}
+            />
+          </Row>
+          <Row label="Tab bar size" description="How tall the tabs are when several documents are open.">
+            <Segmented
+              label="Tab bar size"
+              value={layout.tabBarSize}
+              options={[
+                { value: "comfortable", label: "Roomy" },
+                { value: "compact", label: "Compact" },
+                { value: "slim", label: "Slim" },
+                { value: "minimal", label: "Minimal" },
+              ]}
+              onChange={(v) => updateLayout({ tabBarSize: v })}
             />
           </Row>
           <Row label="Tools bar" description="Which edge the annotation tools dock to.">

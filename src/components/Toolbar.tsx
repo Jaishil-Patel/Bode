@@ -6,6 +6,8 @@ import { useFormValues } from "../forms/useFormValues";
 import FormStatus from "../forms/FormStatus";
 import { useAnnotations } from "../annotations/useAnnotations";
 import { useFullscreen } from "../store/fullscreenStore";
+import { addNoteToCurrentDoc } from "../notes/NoteLayer";
+import { isAndroid } from "../platform/files";
 import {
   IconSidebar,
   IconSearch,
@@ -23,6 +25,7 @@ import {
   IconPen,
   IconPages,
   IconZen,
+  IconNote,
   IconMore,
 } from "./icons";
 
@@ -44,7 +47,7 @@ function Btn({
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md transition-colors ${
+      className={`flex h-[var(--tb-btn)] w-[var(--tb-btn)] shrink-0 items-center justify-center rounded-md transition-colors ${
         disabled
           ? "cursor-default text-muted/40"
           : `hover:bg-surface-2 ${active ? "bg-surface-2 text-accent" : "text-text"}`
@@ -252,6 +255,19 @@ export default function Toolbar({
       icon: <IconZen />,
       onClick: toggleFullscreen,
     },
+    /*
+     * Markdown and HTML have no tools bar, so on the desktop their notes come from Ctrl+Shift+N or
+     * the command palette. A phone has neither, so it gets the action here, in the ⋯ menu. (A PDF
+     * has the Note tool on its tools bar, on every device.)
+     */
+    isText &&
+      isAndroid() && {
+        id: "note",
+        title: "New sticky note",
+        label: "Sticky note",
+        icon: <IconNote />,
+        onClick: addNoteToCurrentDoc,
+      },
     {
       id: "devices",
       title: "Devices on my network",
@@ -271,7 +287,9 @@ export default function Toolbar({
 
   return (
     <div
-      className="no-select relative flex min-h-12 items-center gap-0.5 px-2 sm:gap-1"
+      // Sized by the "Top bar size" setting: every measurement below reads the variables it sets.
+      data-toolbar-size={layout.toolbarSize ?? "comfortable"}
+      className="no-select relative flex min-h-[var(--tb-h)] items-center gap-0.5 px-2 sm:gap-1"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       {/* The sidebar holds thumbnails and the outline, so it only means anything with a PDF open:
