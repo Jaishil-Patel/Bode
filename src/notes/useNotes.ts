@@ -1,11 +1,10 @@
 /*
- * Sticky notes — a portal's floating pane, holding your own words instead of a piece of the page.
+ * Sticky notes — a portal's pane, holding your own words instead of a piece of the page.
  *
- * Like a portal, a note is pinned to the *window* rather than to a spot on a page: it stays put
- * while the document scrolls underneath, which is what makes it useful for keeping a thought in
- * view while reading on. Unlike a portal it outlives the session. A portal can be pinned again in
- * a second; what you wrote cannot, so notes are saved per document and come back when it is
- * reopened, in any window.
+ * Unlike a portal, a note is stuck to the *document*: put next to a paragraph, it scrolls with
+ * that paragraph, as a real sticky note on a real page would (see `surface.ts`). And it outlives
+ * the session. A portal can be pinned again in a second; what you wrote cannot, so notes are saved
+ * per document and come back when it is reopened, in any window.
  *
  * Kept out of the file on purpose, and out of the annotation store with it: a note belongs to the
  * reader, not to the document, and works the same for a Markdown or HTML file that has nowhere to
@@ -15,6 +14,7 @@ import { create } from "zustand";
 import { load } from "@tauri-apps/plugin-store";
 import { sharedStore } from "../platform/sharedStore";
 import { contentTop } from "../platform/contentTop";
+import { getNoteSurface, type NoteAnchor } from "./surface";
 
 export const NOTE_COLORS = ["yellow", "pink", "green", "blue"] as const;
 export type NoteColor = (typeof NOTE_COLORS)[number];
@@ -23,9 +23,18 @@ export interface Note {
   id: string;
   /** Plain text of the note, kept alongside `html` for the folded title and for older builds. */
   text: string;
-  /** Where the pane sits on screen, in CSS px, and how big it is (title bar included). */
+  /**
+   * Where the note is stuck on the document: its top-left corner. Absent on notes made before notes
+   * stuck to the page — those were placed on the window — until the document is next on screen.
+   */
+  at?: NoteAnchor;
+  /**
+   * Where the pane was put on screen, in CSS px. Only read for a note with no `at` yet, to stick it
+   * to whatever is under that spot.
+   */
   x: number;
   y: number;
+  /** The pane's size in CSS px, title bar included. The same at every zoom, so it stays readable. */
   w: number;
   h: number;
   /** Stacking order among this document's notes, so clicking a note brings it forward. */
@@ -66,7 +75,7 @@ interface State {
   /** The note just created, which its pane focuses once and then clears. */
   fresh: string | null;
   hydrate: () => Promise<void>;
-  /** Add a note, at a screen point if given (its top-left corner), else mid-window. */
+  /** Add a note, at a screen point if given (its top-left corner), else mid-view. */
   add: (docKey: string, at?: { x: number; y: number }) => void;
   update: (docKey: string, id: string, patch: Partial<Omit<Note, "id">>) => void;
   remove: (docKey: string, id: string) => void;
@@ -91,20 +100,47 @@ export function mergeNotes(
   return out;
 }
 
-/** Where a new note goes: the middle of the window, stepped along for each note already open. */
-export function placeNew(existing: number, view: { w: number; h: number }) {
+export interface ViewRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** Where a new note goes: the middle of the view, stepped along for each note already there. */
+export function placeNew(existing: number, view: ViewRect) {
   const step = (existing % 8) * CASCADE;
   return {
-    x: Math.max(8, Math.round((view.w - NOTE_W) / 2) + step),
-    y: Math.max(contentTop() + 8, Math.round((view.h - NOTE_H) / 2) + step),
+    x: view.left + Math.max(8, Math.round((view.width - NOTE_W) / 2) + step),
+    y: view.top + Math.max(8, Math.round((view.height - NOTE_H) / 2) + step),
   };
 }
+
+/** A screen point moved, if need be, so a note's corner there leaves the whole note in view. */
+export function keepInView(at: { x: number; y: number }, view: ViewRect) {
+  return {
+    x: Math.max(view.left + 8, Math.min(at.x, view.left + view.width - NOTE_W - 8)),
+    y: Math.max(view.top + 8, Math.min(at.y, view.top + view.height - NOTE_H - 8)),
+  };
+}
+
+/** The visible document, or the window below its bars when no viewer has said where that is. */
+const currentView = (): ViewRect =>
+  getNoteSurface()?.bounds() ?? {
+    left: 0,
+    top: contentTop(),
+    width: window.innerWidth,
+    height: window.innerHeight - contentTop(),
+  };
 
 export const useNotes = create<State>((set, get) => {
   /** Replace one document's notes, stamping it as changed now. */
   const edit = (docKey: string, fn: (notes: Note[]) => Note[]) => {
     set((s) => ({
-      byDoc: { ...s.byDoc, [docKey]: { at: Date.now(), notes: fn(s.byDoc[docKey]?.notes ?? []) } },
+      byDoc: {
+        ...s.byDoc,
+        [docKey]: { at: Date.now(), notes: fn(s.byDoc[docKey]?.notes ?? []) },
+      },
     }));
     shared.persist();
   };
@@ -119,16 +155,14 @@ export const useNotes = create<State>((set, get) => {
 
     add: (docKey, at) => {
       const notes = get().byDoc[docKey]?.notes ?? [];
-      const view = { w: window.innerWidth, h: window.innerHeight };
-      const { x, y } = at
-        ? {
-            x: Math.max(8, Math.min(at.x, view.w - NOTE_W - 8)),
-            y: Math.max(contentTop() + 8, Math.min(at.y, view.h - NOTE_H - 8)),
-          }
-        : placeNew(notes.length, view);
+      const view = currentView();
+      const { x, y } = at ? keepInView(at, view) : placeNew(notes.length, view);
       const note: Note = {
         id: noteId(),
         text: "",
+        // With no viewer up (a source editor, say) it waits on its screen spot, and sticks to the
+        // document once that is shown again.
+        at: getNoteSurface()?.fromClient(x, y) ?? undefined,
         x,
         y,
         w: NOTE_W,
@@ -172,4 +206,3 @@ const shared = sharedStore({
     },
   },
 });
-

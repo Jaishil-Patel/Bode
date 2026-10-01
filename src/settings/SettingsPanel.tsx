@@ -243,29 +243,48 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     ),
 
     reading: (
-      <Section title="Pages">
-        <ToggleRow
-          label="Continuous scrolling"
-          description="Scroll straight through the document instead of turning one page at a time."
-          checked={layout.continuous}
-          onChange={(v) => updateLayout({ continuous: v })}
-        />
-        <Row label="Page gap" description="Space between pages.">
-          <Slider
-            label="Page gap"
-            value={layout.pageGap}
-            min={0}
-            max={48}
-            onChange={(v) => updateLayout({ pageGap: v })}
-            format={(v) => `${v}px`}
+      <>
+        <Section title="Pages">
+          <ToggleRow
+            label="Continuous scrolling"
+            description="Scroll straight through the document instead of turning one page at a time."
+            checked={layout.continuous}
+            onChange={(v) => updateLayout({ continuous: v })}
           />
-        </Row>
-        {layout.continuous && (
-          <Hint>
-            Arrow keys scroll the page; left and right turn it once there is nothing left to pan to.
-          </Hint>
-        )}
-      </Section>
+          <Row label="Page gap" description="Space between pages.">
+            <Slider
+              label="Page gap"
+              value={layout.pageGap}
+              min={0}
+              max={48}
+              onChange={(v) => updateLayout({ pageGap: v })}
+              format={(v) => `${v}px`}
+            />
+          </Row>
+          {layout.continuous && (
+            <Hint>
+              Arrow keys scroll the page; left and right turn it once there is nothing left to pan
+              to.
+            </Hint>
+          )}
+        </Section>
+        <Section title="Sticky notes">
+          <Row
+            label="Notes"
+            description="Stick to the page and scroll with it, or float over the window while the page scrolls underneath."
+          >
+            <Segmented
+              label="Sticky notes"
+              value={layout.notesMode}
+              options={[
+                { value: "page", label: "Stick to page" },
+                { value: "window", label: "Float" },
+              ]}
+              onChange={(v) => updateLayout({ notesMode: v })}
+            />
+          </Row>
+        </Section>
+      </>
     ),
 
     interface: (
@@ -284,7 +303,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
           </Row>
           {/* A phone has no title bar of ours — the system draws its status bar there. */}
           {!isAndroid() && (
-            <Row label="Title bar size" description="How tall the strip with the window buttons is.">
+            <Row
+              label="Title bar size"
+              description="How tall the strip with the window buttons is."
+            >
               <Segmented
                 label="Title bar size"
                 value={layout.titleBarSize}
@@ -298,7 +320,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               />
             </Row>
           )}
-          <Row label="Top bar size" description="How tall the bar with the page count, zoom and find is.">
+          <Row
+            label="Top bar size"
+            description="How tall the bar with the page count, zoom and find is."
+          >
             <Segmented
               label="Top bar size"
               value={layout.toolbarSize}
@@ -311,7 +336,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               onChange={(v) => updateLayout({ toolbarSize: v })}
             />
           </Row>
-          <Row label="Tab bar size" description="How tall the tabs are when several documents are open.">
+          <Row
+            label="Tab bar size"
+            description="How tall the tabs are when several documents are open."
+          >
             <Segmented
               label="Tab bar size"
               value={layout.tabBarSize}
@@ -394,7 +422,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="below-caption fixed inset-x-0 bottom-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
+    <div
+      className="below-caption fixed inset-x-0 bottom-0 z-40 flex justify-end bg-black/40"
+      onClick={onClose}
+    >
       <div
         className="glass glass-sheer drawer-inset animate-fade-in flex h-full w-[560px] max-w-full bg-surface shadow-2xl"
         onClick={(e) => e.stopPropagation()}

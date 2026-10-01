@@ -101,12 +101,18 @@ fn mime_for(path: &Path) -> &'static str {
 
 /// Appended to trusted HTML documents. The page has its own origin, so key presses inside it never
 /// reach Bode's window; this forwards just the fullscreen keys, which is what makes F11 work there
-/// the way it does in the sandboxed frame (HtmlView listens for the message). Appending *after* the
-/// document, rather than injecting into <head>, keeps the doctype — and so standards mode — intact.
+/// the way it does in the sandboxed frame (HtmlView listens for the message). It also reports how
+/// far the page has scrolled, and scrolls it when asked, so sticky notes drawn over the frame can
+/// move with the page. Appending *after* the document, rather than injecting into <head>, keeps the
+/// doctype — and so standards mode — intact.
 const KEY_FORWARDER: &[u8] = b"<script>(function(){addEventListener('keydown',function(e){\
 if(e.key!=='F11'&&e.key!=='Escape')return;\
 try{top.postMessage({__bode:'key',key:e.key},'*')}catch(_){}\
-if(e.key==='F11')e.preventDefault();},true);})();</script>";
+if(e.key==='F11')e.preventDefault();},true);\
+addEventListener('scroll',function(){\
+try{top.postMessage({__bode:'scroll',x:scrollX,y:scrollY},'*')}catch(_){}},{passive:true});\
+addEventListener('message',function(e){var d=e.data;\
+if(e.source===top&&d&&d.__bode==='scrollBy')scrollBy(+d.x||0,+d.y||0);});})();</script>";
 
 /// Whether a request is for a document to display, as opposed to a subresource or something the
 /// page fetched itself — only the former should get the key forwarder appended. An engine that

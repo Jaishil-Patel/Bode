@@ -3,6 +3,8 @@ import { useViewer, displaySize } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import { setViewport } from "./viewport";
 import PdfPage from "./PdfPage";
+import { useStickNotes } from "../notes/NoteLayer";
+import type { NoteSurface } from "../notes/surface";
 
 const PADDING = 24; // px of breathing room used when fitting
 const BUFFER = 2; // pages rendered above/below the viewport
@@ -80,6 +82,35 @@ export default function PdfViewer() {
     setViewport(scrollRef.current);
     return () => setViewport(null);
   });
+
+  /*
+   * Where a sticky note dropped on screen lands: on the page under it, or the nearest one when it
+   * is let go in the gap between two. Read off the pages on screen, so it holds for continuous and
+   * single-page layouts alike and for pages of any size.
+   */
+  const noteSurface = useMemo<NoteSurface>(
+    () => ({
+      bounds: () => scrollRef.current?.getBoundingClientRect() ?? new DOMRect(),
+      fromClient: (x, y) => {
+        const pages = scrollRef.current?.querySelectorAll<HTMLElement>("[data-page]") ?? [];
+        let best: { el: HTMLElement; r: DOMRect; d: number } | null = null;
+        for (const el of Array.from(pages)) {
+          const r = el.getBoundingClientRect();
+          const d = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+          if (!best || d < best.d) best = { el, r, d };
+        }
+        if (!best) return null;
+        const s = useViewer.getState().scale;
+        return {
+          page: Number(best.el.dataset.page),
+          x: (x - best.r.left) / s,
+          y: (y - best.r.top) / s,
+        };
+      },
+    }),
+    [],
+  );
+  useStickNotes(noteSurface);
 
   // Track container size for fit calculations.
   useLayoutEffect(() => {

@@ -12,7 +12,7 @@ import Toolbar from "./components/Toolbar";
 import TabBar from "./components/TabBar";
 import AnnotationTools from "./components/AnnotationBar";
 import PortalLayer from "./portals/PortalLayer";
-import NoteLayer, { addNoteToCurrentDoc } from "./notes/NoteLayer";
+import WindowNotes, { addNoteToCurrentDoc } from "./notes/NoteLayer";
 import { useNotes } from "./notes/useNotes";
 import Sidebar from "./components/Sidebar";
 import SearchBar from "./components/SearchBar";
@@ -494,8 +494,8 @@ export default function App() {
           scrolling the document — or scrolling its own page out of the render window — must
           neither move it nor take it away. */}
       {doc && !organizing && <PortalLayer />}
-      {/* Sticky notes: the same pinned-to-the-window panes, for every kind of document. */}
-      {!organizing && <NoteLayer />}
+      {/* Sticky notes, when set to float over the window; stuck to the page, the viewers draw them. */}
+      {!organizing && <WindowNotes />}
       {/* A phone has no F11 and no Escape, so it gets a button instead of advice about keys. */}
       {fullscreen && (isAndroid() ? <FullscreenExitButton /> : <FullscreenHint />)}
 

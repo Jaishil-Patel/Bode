@@ -9,6 +9,7 @@ import AnnotationLayer from "../annotations/AnnotationLayer";
 import LinkLayer from "./LinkLayer";
 import FormLayer from "./FormLayer";
 import { rotatedViewport } from "./pageOps";
+import { PageNotes } from "../notes/NoteLayer";
 
 interface Props {
   doc: PdfDocument;
@@ -371,6 +372,8 @@ export default function PdfPage({
               height={height}
             />
           )}
+          {/* Sticky notes on this page: drawn in it, so they scroll and zoom with it. */}
+          <PageNotes page={pageNumber} scale={scale} />
         </>
       ) : (
         <div className="flex h-full w-full items-center justify-center text-xs text-muted">

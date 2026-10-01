@@ -61,7 +61,15 @@ export interface LayoutSettings {
   titleBarSize: TitleBarSize;
   /** How tall the tab strip shown with more than one document open is. See `[data-tabbar-size]`. */
   tabBarSize: ToolbarSize;
+  /**
+   * How sticky notes behave: stuck to a spot on the document, scrolling with it ("page"), or
+   * floating over the window while the document scrolls underneath ("window"). Every note keeps
+   * both places, so switching never loses one. See `notes/NoteLayer.tsx`.
+   */
+  notesMode: NotesMode;
 }
+
+export type NotesMode = "page" | "window";
 
 export type ToolbarSize = "comfortable" | "compact" | "slim" | "minimal";
 export type TitleBarSize = "standard" | "compact" | "slim" | "minimal";
@@ -154,6 +162,7 @@ const DEFAULT_LAYOUT: LayoutSettings = {
   toolbarSize: onPhone ? "comfortable" : "slim",
   titleBarSize: "compact",
   tabBarSize: onPhone ? "comfortable" : "compact",
+  notesMode: "page",
 };
 
 const STORE_FILE = "settings.json";

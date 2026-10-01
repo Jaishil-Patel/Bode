@@ -1,24 +1,33 @@
 /*
- * One sticky note, floating over the document.
+ * One sticky note, stuck to the document.
  *
  * The shell is a portal's (see `portals/PortalPane.tsx`) — the same title bar to drag, fold and
- * close by, the same grip to resize, the same band of z-indexes — so the two read as one family of
- * things you can pin to the window. What is inside is your own writing instead of a piece of the
+ * close by, the same grip to resize — so the two read as one family. But where a portal floats over
+ * the window, a note is drawn inside the document's own content (see `NoteLayer.tsx`) and scrolls
+ * with it. What is inside is your own writing instead of a piece of the
  * page — and it is highlighted with the page's own highlighter: with that tool picked on the
  * annotation bar, selecting text in a note marks it in the active preset, exactly as on the page.
  */
 import { useEffect, useRef, useState } from "react";
 import { IconClose, IconChevronDown, IconChevronRight } from "../components/icons";
 import { useAnnotations } from "../annotations/useAnnotations";
-import { PORTAL_Z_BASE, PORTAL_Z_TOP, TITLE_H } from "../portals/usePortals";
+import { TITLE_H } from "../portals/usePortals";
 import { NOTE_COLORS, useNotes, type Note, type NoteColor } from "./useNotes";
 import { sanitizeNoteHtml, textToNoteHtml, toEditorHtml } from "./noteHtml";
+import { getNoteSurface } from "./surface";
 import { contentTop } from "../platform/contentTop";
 
 const MIN_W = 160;
 const MIN_H = 80;
 /** How long a press on the colour dot has to be held to offer the colours instead of cycling. */
 const LONG_PRESS_MS = 450;
+/*
+ * Notes stack among themselves in this band. Above everything a page draws (its layers go up to 3,
+ * and a note hanging over the next page must cover that page too), below the search bar (z-30) and
+ * the rest of the app's chrome that floats over the document.
+ */
+const NOTE_Z_BASE = 10;
+const NOTE_Z_TOP = 25;
 
 /*
  * Paper colours, fixed rather than themed. A sticky note is recognisably one because it is a
@@ -37,7 +46,11 @@ const INK = "#27272a";
 /** The outermost highlight around `node` inside the editor, if it is in one. */
 function highlightAt(node: Node, root: HTMLElement): HTMLElement | null {
   let found: HTMLElement | null = null;
-  for (let el = node instanceof HTMLElement ? node : node.parentElement; el && el !== root; el = el.parentElement) {
+  for (
+    let el = node instanceof HTMLElement ? node : node.parentElement;
+    el && el !== root;
+    el = el.parentElement
+  ) {
     const bg = el.style.backgroundColor;
     if (bg && bg !== "transparent" && bg !== "rgba(0, 0, 0, 0)") found = el;
   }
@@ -48,11 +61,19 @@ export default function NotePane({
   note,
   stack,
   docKey,
+  left,
+  top,
+  floating = false,
 }: {
   note: Note;
-  /** Position among the open notes, lowest first. Mapped into a fixed band of z-indexes. */
+  /** Position among the document's notes, lowest first. Mapped into a fixed band of z-indexes. */
   stack: number;
   docKey: string;
+  /** Where the note's corner is, in px within the content it is drawn in — or, floating, on screen. */
+  left: number;
+  top: number;
+  /** Floating over the window rather than stuck to the document (see `notesMode`). */
+  floating?: boolean;
 }) {
   const { update, remove, raise } = useNotes();
   const fresh = useNotes((s) => s.fresh === note.id);
@@ -61,6 +82,11 @@ export default function NotePane({
   const pickerRef = useRef<HTMLDivElement>(null);
   const pressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
+  const paneRef = useRef<HTMLDivElement>(null);
+  /** How far the note has been dragged, shown until it is dropped and stuck down again. */
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
+  // Fades in when made, not each time it is drawn: dropping it on another page draws it anew.
+  const [arriving] = useState(() => useNotes.getState().fresh === note.id);
 
   const color: NoteColor = note.color in PAPER ? note.color : "yellow";
   const paper = PAPER[color];
@@ -146,7 +172,10 @@ export default function NotePane({
   const save = () => {
     const el = editorRef.current;
     if (!el) return;
-    update(docKey, note.id, { html: sanitizeNoteHtml(el.innerHTML), text: el.innerText.replace(/\n$/, "") });
+    update(docKey, note.id, {
+      html: sanitizeNoteHtml(el.innerHTML),
+      text: el.innerText.replace(/\n$/, ""),
+    });
   };
 
   /*
@@ -161,7 +190,13 @@ export default function NotePane({
     if (tool !== "highlight") return;
     const el = editorRef.current;
     const sel = window.getSelection();
-    if (!el || !sel || sel.isCollapsed || !el.contains(sel.anchorNode) || !el.contains(sel.focusNode))
+    if (
+      !el ||
+      !sel ||
+      sel.isCollapsed ||
+      !el.contains(sel.anchorNode) ||
+      !el.contains(sel.focusNode)
+    )
       return;
     // Compared as the browser writes colours, since that is what it reports back.
     const probe = document.createElement("span");
@@ -183,7 +218,10 @@ export default function NotePane({
   useEffect(
     () =>
       useAnnotations.subscribe((s, prev) => {
-        if (s.tool === "highlight" && (prev.tool !== "highlight" || s.activePreset !== prev.activePreset))
+        if (
+          s.tool === "highlight" &&
+          (prev.tool !== "highlight" || s.activePreset !== prev.activePreset)
+        )
           highlightSelection();
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -191,30 +229,45 @@ export default function NotePane({
   );
 
   /*
-   * Positions are saved, and the window they were saved in may have been bigger than this one. The
-   * note is drawn inside the window without rewriting where it was put, so making the window big
-   * again puts it back.
+   * Moving a note is shown as an offset while the pointer is down, and only saved when it is let
+   * go — as a new spot on the document, worked out by the viewer from where the note now is on
+   * screen. That is what lets a note be carried from one page to another.
    */
-  const x = Math.max(0, Math.min(note.x, window.innerWidth - 60));
-  // Kept below the bars across the top too, which can have grown since the note was put there.
-  const y = Math.max(contentTop(), Math.min(note.y, window.innerHeight - TITLE_H));
+  const drop = () => {
+    const el = paneRef.current;
+    if (!el) return;
+    const surface = getNoteSurface();
+    const r = el.getBoundingClientRect();
+    // A floating note may go anywhere below the bars; a stuck one only where its document shows.
+    const view = floating
+      ? new DOMRect(0, contentTop(), window.innerWidth, window.innerHeight - contentTop())
+      : surface?.bounds();
+    if (!view) return;
+    // Its title bar is kept in view, so a note can never be dropped somewhere it cannot be grabbed.
+    const x = Math.max(view.left, Math.min(r.left, view.right - 60));
+    const y = Math.max(view.top, Math.min(r.top, view.bottom - TITLE_H));
+    // Both places are kept, whichever way notes behave now, so switching later finds each note
+    // where it was last put rather than where it was put before that.
+    const at = surface?.fromClient(x, y);
+    update(docKey, note.id, at ? { x, y, at } : { x, y });
+  };
 
   const startDrag = (e: React.PointerEvent, mode: "move" | "resize") => {
     e.preventDefault();
     e.stopPropagation();
     raise(docKey, note.id);
+    // Captured, so a drag carries on over an HTML document's frame, which would otherwise take
+    // the moves for itself.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     const sx = e.clientX;
     const sy = e.clientY;
-    const from = { x, y, w: note.w, h: note.h };
+    const from = { w: note.w, h: note.h };
 
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - sx;
       const dy = ev.clientY - sy;
       if (mode === "move") {
-        update(docKey, note.id, {
-          x: Math.min(Math.max(0, from.x + dx), window.innerWidth - 60),
-          y: Math.min(Math.max(contentTop(), from.y + dy), window.innerHeight - TITLE_H),
-        });
+        setDrag({ dx, dy });
       } else {
         update(docKey, note.id, {
           w: Math.max(MIN_W, from.w + dx),
@@ -226,6 +279,10 @@ export default function NotePane({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", finish);
+      if (mode === "move") {
+        drop();
+        setDrag(null);
+      }
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", finish);
@@ -255,18 +312,25 @@ export default function NotePane({
   );
 
   const firstLine = note.text.split("\n", 1)[0].trim();
-  const iconBtn = "flex h-7 w-7 shrink-0 items-center justify-center rounded opacity-60 hover:opacity-100";
+  const iconBtn =
+    "flex h-7 w-7 shrink-0 items-center justify-center rounded opacity-60 hover:opacity-100";
 
   return (
     <div
-      onPointerDown={() => raise(docKey, note.id)}
-      className="animate-fade-in fixed flex flex-col overflow-hidden rounded-lg shadow-2xl"
+      ref={paneRef}
+      data-note
+      onPointerDown={(e) => {
+        // The page underneath must not also take the press: it would start a selection or a stroke.
+        e.stopPropagation();
+        raise(docKey, note.id);
+      }}
+      className={`${arriving ? "animate-fade-in " : ""}${floating ? "fixed" : "absolute"} flex flex-col overflow-hidden rounded-lg shadow-2xl`}
       style={{
-        left: x,
-        top: y,
+        left: left + (drag?.dx ?? 0),
+        top: top + (drag?.dy ?? 0),
         width: note.w,
         height: note.folded ? TITLE_H : note.h,
-        zIndex: Math.min(PORTAL_Z_BASE + stack, PORTAL_Z_TOP),
+        zIndex: Math.min(NOTE_Z_BASE + stack, NOTE_Z_TOP),
         background: paper,
         color: INK,
         border: "1px solid rgb(0 0 0 / 0.12)",
@@ -363,7 +427,10 @@ export default function NotePane({
         </button>
       </div>
 
-      <div className="relative min-h-0 flex-1" style={{ display: note.folded ? "none" : undefined }}>
+      <div
+        className="relative min-h-0 flex-1"
+        style={{ display: note.folded ? "none" : undefined }}
+      >
         <div
           ref={editorRef}
           contentEditable
@@ -390,7 +457,11 @@ export default function NotePane({
             }
           }}
           className="note-editor h-full w-full overflow-auto px-3 py-2 text-sm leading-relaxed outline-none"
-          style={{ color: INK, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+          style={{
+            color: INK,
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+          }}
         />
         {/* Resize grip. Its own pointer handling, so a drag here never reads as a move. */}
         <div

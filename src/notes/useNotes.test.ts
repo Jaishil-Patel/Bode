@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // No Tauri here: the store runs on in-memory state, which is what these tests are about.
-vi.mock("@tauri-apps/plugin-store", () => ({ load: () => Promise.reject(new Error("no store")) }));
+vi.mock("@tauri-apps/plugin-store", () => ({
+  load: () => Promise.reject(new Error("no store")),
+}));
 // Tests run in node; a new note is placed against the window's size.
 vi.stubGlobal("window", { innerWidth: 1000, innerHeight: 800 });
 
@@ -25,7 +27,10 @@ const doc = (at: number, ids: string[]): DocNotes => ({
 
 describe("mergeNotes", () => {
   it("keeps the more recently changed copy of each document", () => {
-    const merged = mergeNotes({ a: doc(1, ["x"]), b: doc(5, ["y"]) }, { a: doc(2, ["x", "z"]), b: doc(3, []) });
+    const merged = mergeNotes(
+      { a: doc(1, ["x"]), b: doc(5, ["y"]) },
+      { a: doc(2, ["x", "z"]), b: doc(3, []) },
+    );
     expect(merged.a.notes.map((n) => n.id)).toEqual(["x", "z"]);
     expect(merged.b.notes.map((n) => n.id)).toEqual(["y"]);
   });
@@ -35,21 +40,34 @@ describe("mergeNotes", () => {
   });
 
   it("keeps documents only one side knows about", () => {
-    expect(Object.keys(mergeNotes({ a: doc(1, []) }, { b: doc(1, []) })).sort()).toEqual(["a", "b"]);
+    expect(Object.keys(mergeNotes({ a: doc(1, []) }, { b: doc(1, []) })).sort()).toEqual([
+      "a",
+      "b",
+    ]);
   });
 });
 
 describe("placeNew", () => {
   it("centres the first note and steps each following one", () => {
-    const first = placeNew(0, { w: 1000, h: 800 });
-    const second = placeNew(1, { w: 1000, h: 800 });
+    const first = placeNew(0, { left: 0, top: 0, width: 1000, height: 800 });
+    const second = placeNew(1, { left: 0, top: 0, width: 1000, height: 800 });
     expect(first).toEqual({ x: 380, y: 300 });
     expect(second.x - first.x).toBe(24);
     expect(second.y - first.y).toBe(24);
   });
 
   it("never places a note off the top-left of a tiny window", () => {
-    expect(placeNew(0, { w: 100, h: 100 })).toEqual({ x: 8, y: 8 });
+    expect(placeNew(0, { left: 0, top: 0, width: 100, height: 100 })).toEqual({
+      x: 8,
+      y: 8,
+    });
+  });
+
+  it("places within the view, not the window", () => {
+    expect(placeNew(0, { left: 200, top: 100, width: 1000, height: 800 })).toEqual({
+      x: 580,
+      y: 400,
+    });
   });
 });
 
@@ -87,5 +105,4 @@ describe("useNotes", () => {
     s.remove("a", first.id);
     expect(notes("a").map((n) => n.id)).toEqual([second.id]);
   });
-
 });

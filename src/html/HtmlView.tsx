@@ -1,8 +1,10 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useViewer } from "../store/viewerStore";
 import { handleFullscreenKey } from "../store/fullscreenStore";
 import SourceEditor from "../components/SourceEditor";
+import { FlowNotes, useStickNotes } from "../notes/NoteLayer";
+import type { NoteSurface } from "../notes/surface";
 
 /**
  * HTML tab view. Unlike Markdown — which we re-render into Bode's own theme — an HTML file is
@@ -28,6 +30,51 @@ export default function HtmlView() {
   const trustedUrl = useViewer((s) => s.htmlTrustedUrl);
   const reloadNonce = useViewer((s) => s.htmlReloadNonce);
 
+  /*
+   * Sticky notes. The page scrolls inside its frame, where our notes cannot go, so they are drawn
+   * over the frame and moved by however far it has scrolled: in document px, a note stays on the
+   * same spot of the page. The sandboxed frame's scrolling is read straight off it; a trusted page
+   * is on another origin and reports its own (see KEY_FORWARDER in lib.rs).
+   */
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [scroll, setScroll] = useState({ x: 0, y: 0 });
+  const scrollRef = useRef(scroll);
+  scrollRef.current = scroll;
+  // A different page, or the same one loaded again, starts at its top.
+  useEffect(() => setScroll({ x: 0, y: 0 }), [textSource, trustedUrl, reloadNonce]);
+  const noteSurface = useMemo<NoteSurface>(
+    () => ({
+      bounds: () => frameRef.current?.getBoundingClientRect() ?? new DOMRect(),
+      fromClient: (x, y) => {
+        const r = frameRef.current?.getBoundingClientRect();
+        if (!r) return null;
+        return {
+          x: x - r.left + scrollRef.current.x,
+          y: y - r.top + scrollRef.current.y,
+        };
+      },
+    }),
+    [],
+  );
+  useStickNotes(textSource != null && !editing ? noteSurface : null);
+
+  /*
+   * The wheel over a note scrolls the page under it, as it would on a PDF or Markdown document,
+   * unless it is over writing that has scrolling of its own to do.
+   */
+  const onWheel = (e: React.WheelEvent) => {
+    const editor = (e.target as Element).closest(".note-editor");
+    if (editor && editor.scrollHeight > editor.clientHeight) return;
+    const win = frameRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.scrollBy(e.deltaX, e.deltaY);
+    } catch {
+      // A trusted page is on its own origin: ask it to scroll itself.
+      win.postMessage({ __bode: "scrollBy", x: e.deltaX, y: e.deltaY }, "*");
+    }
+  };
+
   // Listeners installed from *this* realm onto the frame's document — the frame runs no scripts of
   // its own. A link click would otherwise be silently swallowed by the sandbox, so mirror
   // MarkdownView and hand external URLs to the OS browser. Reaching contentDocument at all is the
@@ -37,12 +84,21 @@ export default function HtmlView() {
       const doc = e.currentTarget.contentDocument;
       if (!doc) return;
 
+      const win = doc.defaultView;
+      win?.addEventListener("scroll", () => setScroll({ x: win.scrollX, y: win.scrollY }), {
+        passive: true,
+      });
+
       // Keys pressed while the frame has focus never reach the app window on their own. Forward
       // the fullscreen ones so F11 works no matter where the user last clicked, and the tab
       // switcher's (Ctrl+Tab, and the Ctrl release that finishes it) so it does too.
       const forward = (ev: KeyboardEvent) =>
         window.dispatchEvent(
-          new KeyboardEvent(ev.type, { key: ev.key, ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey }),
+          new KeyboardEvent(ev.type, {
+            key: ev.key,
+            ctrlKey: ev.ctrlKey,
+            shiftKey: ev.shiftKey,
+          }),
         );
       doc.addEventListener("keydown", (ev) => {
         if (ev.key === "Tab" && ev.ctrlKey) {
@@ -72,8 +128,22 @@ export default function HtmlView() {
   // fullscreen keys up to this window instead.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      const data = e.data as { __bode?: string; key?: string } | null;
-      if (data && data.__bode === "key" && typeof data.key === "string") handleFullscreenKey(data.key);
+      const data = e.data as {
+        __bode?: string;
+        key?: string;
+        x?: number;
+        y?: number;
+      } | null;
+      if (data && data.__bode === "key" && typeof data.key === "string")
+        handleFullscreenKey(data.key);
+      if (
+        data &&
+        data.__bode === "scroll" &&
+        e.source === frameRef.current?.contentWindow &&
+        typeof data.x === "number" &&
+        typeof data.y === "number"
+      )
+        setScroll({ x: data.x, y: data.y });
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -87,32 +157,42 @@ export default function HtmlView() {
   // dark theme; give it the white canvas a browser would.
   const frameClass = "h-full w-full border-0 bg-white";
 
+  const notes = <FlowNotes dx={-scroll.x} dy={-scroll.y} />;
+
   if (trustedUrl) {
     return (
-      <iframe
-        // Re-keying on the nonce forces a fresh load after the source is saved.
-        key={reloadNonce}
-        title={fileName ?? "HTML document"}
-        src={reloadNonce ? `${trustedUrl}?v=${reloadNonce}` : trustedUrl}
-        // `allow-same-origin` here keeps the document on its OWN origin (bodehtml), which is not
-        // Bode's — that's what gives it localStorage without any access to the app. Top-level
-        // navigation stays blocked, so the page can't replace the Bode window.
-        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
-        className={frameClass}
-      />
+      <div className="relative h-full w-full overflow-hidden" onWheel={onWheel}>
+        <iframe
+          ref={frameRef}
+          // Re-keying on the nonce forces a fresh load after the source is saved.
+          key={reloadNonce}
+          title={fileName ?? "HTML document"}
+          src={reloadNonce ? `${trustedUrl}?v=${reloadNonce}` : trustedUrl}
+          // `allow-same-origin` here keeps the document on its OWN origin (bodehtml), which is not
+          // Bode's — that's what gives it localStorage without any access to the app. Top-level
+          // navigation stays blocked, so the page can't replace the Bode window.
+          sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+          className={frameClass}
+        />
+        {notes}
+      </div>
     );
   }
 
   return (
-    <iframe
-      title={fileName ?? "HTML document"}
-      srcDoc={textSource}
-      // NEVER add `allow-scripts` here: paired with `allow-same-origin` on a srcdoc document it
-      // would give the page full access to Bode's own origin and defeat the sandbox entirely.
-      // Running scripts is what trusted mode above is for, on a separate origin.
-      sandbox="allow-same-origin"
-      onLoad={installFrameHandlers}
-      className={frameClass}
-    />
+    <div className="relative h-full w-full overflow-hidden" onWheel={onWheel}>
+      <iframe
+        ref={frameRef}
+        title={fileName ?? "HTML document"}
+        srcDoc={textSource}
+        // NEVER add `allow-scripts` here: paired with `allow-same-origin` on a srcdoc document it
+        // would give the page full access to Bode's own origin and defeat the sandbox entirely.
+        // Running scripts is what trusted mode above is for, on a separate origin.
+        sandbox="allow-same-origin"
+        onLoad={installFrameHandlers}
+        className={frameClass}
+      />
+      {notes}
+    </div>
   );
 }
