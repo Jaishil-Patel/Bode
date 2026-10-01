@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { useViewer } from "../store/viewerStore";
 import { IconChevronUp, IconChevronDown, IconClose } from "./icons";
 
+const FIND_EVENT = "bode:find";
+
+/** Open the find bar already searching for `text` — "Find in document" in the right-click menu. */
+export function findInDocument(text: string) {
+  window.dispatchEvent(new CustomEvent(FIND_EVENT, { detail: text }));
+}
+
 export default function SearchBar() {
   const { search, runSearch, nextMatch, prevMatch, clearSearch, toggleSearch } = useViewer();
   const [value, setValue] = useState(search.query);
@@ -11,6 +18,16 @@ export default function SearchBar() {
   useEffect(() => {
     if (search.open) inputRef.current?.focus();
   }, [search.open]);
+
+  // The field holds its own text while typing, so a search started from elsewhere goes through it.
+  useEffect(() => {
+    const onFind = (e: Event) => {
+      setValue((e as CustomEvent<string>).detail);
+      toggleSearch(true);
+    };
+    window.addEventListener(FIND_EVENT, onFind);
+    return () => window.removeEventListener(FIND_EVENT, onFind);
+  }, [toggleSearch]);
 
   useEffect(() => {
     window.clearTimeout(debounce.current);

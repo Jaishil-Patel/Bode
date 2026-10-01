@@ -278,3 +278,45 @@ export const IconCheck = (p: P) => svg(<path d="m4.5 12.5 5 5 10-11" />, p.class
 export const IconPlus = (p: P) => svg(<path d="M12 5v14M5 12h14" />, p.className);
 export const IconWifiOff = (p: P) =>
   svg(<><path d="M2 4l20 16" /><path d="M8.5 16.5a5 5 0 0 1 6 0" /><path d="M5 13a10 10 0 0 1 3-2" /><path d="M18.5 13a10 10 0 0 0-2.3-1.6" /><path d="M1.8 9.3a15 15 0 0 1 4.4-2.7" /><path d="M22.2 9.3a15 15 0 0 0-11-3.2" /><path d="M12 20h.01" /></>, p.className);
+
+// ---- Right-click menu ----
+export const IconCopy = (p: P) =>
+  svg(
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+    </>,
+    p.className,
+  );
+export const IconLink = (p: P) =>
+  svg(
+    <>
+      <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+      <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+    </>,
+    p.className,
+  );
+export const IconGlobe = (p: P) =>
+  svg(
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+    </>,
+    p.className,
+  );
+export const IconSpeaker = (p: P) =>
+  svg(
+    <>
+      <path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" />
+      <path d="M15.5 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" />
+    </>,
+    p.className,
+  );
+export const IconExternal = (p: P) =>
+  svg(
+    <>
+      <path d="M14 4h6v6M20 4l-9 9" />
+      <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </>,
+    p.className,
+  );

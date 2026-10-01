@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useViewer } from "../store/viewerStore";
 import { handleFullscreenKey } from "../store/fullscreenStore";
 import SourceEditor from "../components/SourceEditor";
+import { frameContextMenu } from "../components/DocumentMenu";
 import { FlowNotes, useStickNotes } from "../notes/NoteLayer";
 import type { NoteSurface } from "../notes/surface";
 
@@ -81,8 +82,12 @@ export default function HtmlView() {
   // only reason for `allow-same-origin` in sandboxed mode — see the warning below.
   const installFrameHandlers = useCallback((e: React.SyntheticEvent<HTMLIFrameElement>) => {
     try {
-      const doc = e.currentTarget.contentDocument;
+      const frame = e.currentTarget;
+      const doc = frame.contentDocument;
       if (!doc) return;
+
+      // Bode's right-click menu rather than the browser's, as on the rest of the document.
+      doc.addEventListener("contextmenu", (ev) => frameContextMenu(frame, ev));
 
       const win = doc.defaultView;
       win?.addEventListener("scroll", () => setScroll({ x: win.scrollX, y: win.scrollY }), {

@@ -280,6 +280,33 @@
 }
 
 /*
+ * A menu: the same glass, made to be read at a glance.
+ *
+ * A right-click menu opens over whatever is on the page — a photo, a coloured title band — and is
+ * read word by word, quickly. The panel fill let that through strongly enough to sit behind the
+ * words, so a menu takes a denser fill and a heavier frost, and goes flat (see `glass-flat`): the
+ * bend is what makes a panel look like glass, and also what makes the text behind a menu's own
+ * text wobble into it.
+ */
+[data-theme="glass"] .glass.glass-menu {
+  background-color: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(18px) saturate(170%) brightness(1.05);
+  -webkit-backdrop-filter: blur(18px) saturate(170%) brightness(1.05);
+}
+[data-theme="glass"][data-pages="inverted"] .glass.glass-menu,
+[data-pages="inverted"] [data-theme="glass"] .glass.glass-menu {
+  background-color: rgba(14, 17, 23, 0.82);
+}
+/* --border is a white hairline here, which vanishes into a fill this white. */
+[data-theme="glass"] .glass-menu .menu-sep {
+  background-color: rgba(15, 23, 42, 0.1);
+}
+[data-theme="glass"][data-pages="inverted"] .glass-menu .menu-sep,
+[data-pages="inverted"] [data-theme="glass"] .glass-menu .menu-sep {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+/*
  * The marker half of the split.
  *
  * Tailwind's utilities are the seam: `text-accent` and `border-accent` are only ever the accent

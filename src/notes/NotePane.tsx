@@ -33,7 +33,7 @@ const NOTE_Z_TOP = 25;
  * Paper colours, fixed rather than themed. A sticky note is recognisably one because it is a
  * yellow square whatever the room looks like, and dark ink on it stays readable under every theme.
  */
-const PAPER: Record<NoteColor, string> = {
+export const PAPER: Record<NoteColor, string> = {
   yellow: "#fdf1a6",
   pink: "#fbd3e6",
   green: "#c9f2d4",
@@ -318,7 +318,7 @@ export default function NotePane({
   return (
     <div
       ref={paneRef}
-      data-note
+      data-note={note.id}
       onPointerDown={(e) => {
         // The page underneath must not also take the press: it would start a selection or a stroke.
         e.stopPropagation();

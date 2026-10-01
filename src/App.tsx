@@ -13,6 +13,8 @@ import TabBar from "./components/TabBar";
 import AnnotationTools from "./components/AnnotationBar";
 import PortalLayer from "./portals/PortalLayer";
 import WindowNotes, { addNoteToCurrentDoc } from "./notes/NoteLayer";
+import { ContextMenuHost } from "./components/ContextMenu";
+import { useDocumentMenu } from "./components/DocumentMenu";
 import { useNotes } from "./notes/useNotes";
 import Sidebar from "./components/Sidebar";
 import SearchBar from "./components/SearchBar";
@@ -210,6 +212,8 @@ export default function App() {
   const { doc, textKind, loading, error, fileName, openWithDialog, openPath, zoomIn, zoomOut, resetZoom, toggleSearch, nextPage, prevPage } =
     useViewer();
   const { hydrate, layout, toggleSidebar } = useSettings();
+  // Bode's own right-click menu over the document, instead of the browser's.
+  useDocumentMenu();
   const fullscreen = useFullscreen((s) => s.fullscreen);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -531,6 +535,7 @@ export default function App() {
         </main>
       </div>
 
+      <ContextMenuHost />
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

@@ -1,10 +1,11 @@
 import { useCallback, useRef, useState } from "react";
+import { useContextMenu } from "./ContextMenu";
 import { useViewer } from "../store/viewerStore";
 import { useSettings } from "../settings/useSettings";
 import type { OutlineItem } from "../pdf/usePdfDocument";
 import { IconChevronRight } from "./icons";
 import PageThumb from "./PageThumb";
-import PageMenu from "./PageMenu";
+import { pageMenuItems } from "./PageMenu";
 import type { PageRef } from "../pdf/pageOps";
 
 const THUMB_WIDTH = 140;
@@ -129,9 +130,12 @@ export default function Sidebar() {
   const { pages, outline } = useViewer();
   const { layout, updateLayout } = useSettings();
   const tab = layout.sidebarTab;
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-  const openMenu = useCallback((id: string, x: number, y: number) => setMenu({ id, x, y }), []);
-  const closeMenu = useCallback(() => setMenu(null), []);
+  const openMenu = useCallback((id: string, x: number, y: number) => {
+    const n = useViewer.getState().pages.findIndex((p) => p.id === id) + 1;
+    useContextMenu
+      .getState()
+      .open(x, y, [{ kind: "header", label: `Page ${n}` }, ...pageMenuItems(id)]);
+  }, []);
 
   return (
     <div className="glass no-select relative z-30 flex h-full w-56 flex-col border-r border-border bg-surface">
@@ -162,7 +166,6 @@ export default function Sidebar() {
           <p className="px-1 py-4 text-center text-xs text-muted">No outline in this document.</p>
         )}
       </div>
-      {menu && <PageMenu pageId={menu.id} at={{ x: menu.x, y: menu.y }} onClose={closeMenu} />}
     </div>
   );
 }

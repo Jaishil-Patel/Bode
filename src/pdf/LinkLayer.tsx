@@ -89,6 +89,8 @@ export default function LinkLayer({ doc, pageNumber, scale, rotation = 0 }: Prop
           key={i}
           title={link.url}
           onClick={() => onClick(link)}
+          // For the right-click menu: which of these is a link, and where it goes if it leaves.
+          data-link={link.url ?? "internal"}
           // Out of the tab order: these are invisible hotspots covering a page's links, and with
           // form fields now tabbable, leaving them in would stop the caret on every citation
           // between one field and the next. Clicking still works.
