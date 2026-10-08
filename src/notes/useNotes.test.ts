@@ -51,7 +51,7 @@ describe("placeNew", () => {
   it("centres the first note and steps each following one", () => {
     const first = placeNew(0, { left: 0, top: 0, width: 1000, height: 800 });
     const second = placeNew(1, { left: 0, top: 0, width: 1000, height: 800 });
-    expect(first).toEqual({ x: 380, y: 300 });
+    expect(first).toEqual({ x: 410, y: 325 });
     expect(second.x - first.x).toBe(24);
     expect(second.y - first.y).toBe(24);
   });
@@ -65,8 +65,8 @@ describe("placeNew", () => {
 
   it("places within the view, not the window", () => {
     expect(placeNew(0, { left: 200, top: 100, width: 1000, height: 800 })).toEqual({
-      x: 580,
-      y: 400,
+      x: 610,
+      y: 425,
     });
   });
 });

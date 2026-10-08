@@ -34,7 +34,7 @@ export interface Note {
    */
   x: number;
   y: number;
-  /** The pane's size in CSS px, title bar included. The same at every zoom, so it stays readable. */
+  /** The pane's size in CSS px, title bar included. On a PDF, at 100% zoom: it zooms with the page. */
   w: number;
   h: number;
   /** Stacking order among this document's notes, so clicking a note brings it forward. */
@@ -65,8 +65,8 @@ const STORE_FILE = "notes.json";
 /** Typing writes on every keystroke; the debounce is what keeps that off the disk. */
 const PERSIST_DEBOUNCE_MS = 400;
 
-export const NOTE_W = 240;
-export const NOTE_H = 200;
+export const NOTE_W = 180;
+export const NOTE_H = 150;
 /** How far each new note steps from the last, so a second one never hides the first exactly. */
 const CASCADE = 24;
 

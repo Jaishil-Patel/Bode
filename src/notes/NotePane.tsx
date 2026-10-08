@@ -17,7 +17,7 @@ import { sanitizeNoteHtml, textToNoteHtml, toEditorHtml } from "./noteHtml";
 import { getNoteSurface } from "./surface";
 import { contentTop } from "../platform/contentTop";
 
-const MIN_W = 160;
+const MIN_W = 120;
 const MIN_H = 80;
 /** How long a press on the colour dot has to be held to offer the colours instead of cycling. */
 const LONG_PRESS_MS = 450;
@@ -64,6 +64,7 @@ export default function NotePane({
   left,
   top,
   floating = false,
+  zoom = 1,
 }: {
   note: Note;
   /** Position among the document's notes, lowest first. Mapped into a fixed band of z-indexes. */
@@ -74,6 +75,11 @@ export default function NotePane({
   top: number;
   /** Floating over the window rather than stuck to the document (see `notesMode`). */
   floating?: boolean;
+  /**
+   * The zoom of the page it is stuck to. Its size is kept unzoomed, so it scales with the page as
+   * a sticky note on paper would.
+   */
+  zoom?: number;
 }) {
   const { update, remove, raise } = useNotes();
   const fresh = useNotes((s) => s.fresh === note.id);
@@ -269,9 +275,13 @@ export default function NotePane({
       if (mode === "move") {
         setDrag({ dx, dy });
       } else {
+        // The pointer moves on screen; the size is kept unzoomed.
+        const rw = dx / zoom;
+        const rh = dy / zoom;
+        // Folded, only the width: the height is the title bar's, and the unfolded height is kept.
         update(docKey, note.id, {
-          w: Math.max(MIN_W, from.w + dx),
-          h: Math.max(MIN_H + TITLE_H, from.h + dy),
+          w: Math.max(MIN_W, from.w + rw),
+          ...(note.folded ? {} : { h: Math.max(MIN_H + TITLE_H, from.h + rh) }),
         });
       }
     };
@@ -330,6 +340,9 @@ export default function NotePane({
         top: top + (drag?.dy ?? 0),
         width: note.w,
         height: note.folded ? TITLE_H : note.h,
+        // Zoomed with the page, about the corner it is stuck by, so it covers the same patch of it.
+        transform: zoom === 1 ? undefined : `scale(${zoom})`,
+        transformOrigin: "0 0",
         zIndex: Math.min(NOTE_Z_BASE + stack, NOTE_Z_TOP),
         background: paper,
         color: INK,
@@ -427,6 +440,22 @@ export default function NotePane({
         </button>
       </div>
 
+      {note.folded && (
+        // Folded there is no corner grip, so the right edge resizes the width instead.
+        <div
+          onPointerDown={(e) => startDrag(e, "resize")}
+          title="Resize"
+          style={{
+            position: "absolute",
+            right: 0,
+            top: 0,
+            width: 6,
+            height: TITLE_H,
+            cursor: "ew-resize",
+            touchAction: "none",
+          }}
+        />
+      )}
       <div
         className="relative min-h-0 flex-1"
         style={{ display: note.folded ? "none" : undefined }}

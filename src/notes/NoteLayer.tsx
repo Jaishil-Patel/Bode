@@ -51,10 +51,10 @@ export function PageNotes({ page, scale }: { page: number; scale: number }) {
             note={n}
             docKey={docKey}
             stack={rank.get(n.id) ?? 0}
-            // Where on the page is zoomed with it; the note itself keeps its size, as a sticky
-            // note would — shrunk with a zoomed-out page it would soon be unreadable.
+            // Zoomed with the page, place and size alike, so it stays on the same patch of it.
             left={n.at!.x * scale}
             top={n.at!.y * scale}
+            zoom={scale}
           />
         ))}
     </>
