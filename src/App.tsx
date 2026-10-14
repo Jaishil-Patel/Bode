@@ -225,11 +225,26 @@ export default function App() {
     useAnnotations.getState().hydrate();
     useFormValues.getState().hydrate();
     useNotes.getState().hydrate();
+    // Files open one after another, never concurrently: each open captures the outgoing tab's
+    // state, so two racing opens would trample each other. Selecting several files in Explorer
+    // and pressing Enter delivers them all at once.
+    let queue = Promise.resolve();
+    const open = (p: string) => {
+      queue = queue.then(() => openPath(p)).catch(() => {});
+    };
+
+    // A PDF opened from the OS while Bode is already running arrives here: the single-instance
+    // plugin routes it to this window via an "open-file" event. openPath handles tabs vs windows.
+    // Also how a tab dragged from another Bode window and dropped on this one arrives.
+    const unlistenP = listen<string>("open-file", (e) => {
+      if (e.payload) open(e.payload);
+    });
+
     // A window spawned for the "separate windows" open mode carries its file in the URL;
-    // otherwise ask the backend for any file-association / "Open with" launch path.
+    // otherwise ask the backend for any file-association / "Open with" launch paths.
     const fileParam = new URLSearchParams(window.location.search).get("file");
     if (fileParam) {
-      openPath(decodeURIComponent(fileParam));
+      open(decodeURIComponent(fileParam));
     } else if (isAndroid()) {
       // Android "Open with": MainActivity copies the shared PDF into the app cache and gives us
       // the path. Warm starts push it via window.__bodeOpenFile; a cold start pulls the pending
@@ -238,23 +253,17 @@ export default function App() {
         __bodeOpenFile?: (p: string) => void;
         BodeAndroid?: { ready?: () => string | null };
       };
-      w.__bodeOpenFile = (p) => openPath(p);
+      w.__bodeOpenFile = (p) => open(p);
       const launch = w.BodeAndroid?.ready?.();
-      if (launch) openPath(launch);
+      if (launch) open(launch);
     } else {
-      invoke<string | null>("take_launch_file")
-        .then((p) => {
-          if (p) openPath(p);
-        })
+      // Only once the listener is up: from this call on, the backend emits new files instead of
+      // queueing them, so asking any earlier could drop one that lands in between.
+      unlistenP
+        .then(() => invoke<string[]>("take_launch_files"))
+        .then((paths) => paths.forEach(open))
         .catch(() => {});
     }
-
-    // A PDF opened from the OS while Bode is already running arrives here: the single-instance
-    // plugin routes it to this window via an "open-file" event. openPath handles tabs vs windows.
-    // Also how a tab dragged from another Bode window and dropped on this one arrives.
-    const unlistenP = listen<string>("open-file", (e) => {
-      if (e.payload) openPath(e.payload);
-    });
     return () => {
       unlistenP.then((un) => un()).catch(() => {});
     };

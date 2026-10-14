@@ -6,9 +6,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
 
-/// Holds the file path the app was launched with (e.g. via "Open with" / file association).
+/// Files handed to Bode by the OS (e.g. "Open with" / file association) that the frontend has not
+/// picked up yet.
+///
+/// Opening several files at once from Explorer launches Bode once per file. The first process
+/// becomes the app; the rest arrive through the single-instance plugin, usually before the window's
+/// frontend has loaded and is listening for "open-file". Until the frontend asks for its launch
+/// files, those paths are queued here rather than emitted into the void.
 #[derive(Default)]
-struct LaunchFile(Mutex<Option<String>>);
+struct LaunchFiles(Mutex<PendingOpens>);
+
+#[derive(Default)]
+struct PendingOpens {
+    paths: Vec<String>,
+    /// Set once the frontend has taken the queue; from then on files are emitted directly.
+    ready: bool,
+}
 
 /*
  * "Trusted page" support for HTML tabs.
@@ -186,11 +199,12 @@ fn serve_trusted_html<R: tauri::Runtime>(
         .unwrap()
 }
 
-/// First CLI/argv entry that looks like a real, openable path (skipping flags). The caller is
+/// Every CLI/argv entry that looks like a real, openable path (skipping flags). The caller is
 /// responsible for dropping argv[0] (the program path) first.
-fn first_existing_path<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+fn existing_paths<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
     args.into_iter()
-        .find(|a| !a.starts_with('-') && std::path::Path::new(a).exists())
+        .filter(|a| !a.starts_with('-') && std::path::Path::new(a).exists())
+        .collect()
 }
 
 /// Read a file's raw bytes. Used by the frontend to hand PDF data to PDF.js.
@@ -284,10 +298,17 @@ fn send_file_to_window(app: tauri::AppHandle, label: String, path: String) -> Re
     win.emit("open-file", path).map_err(|e| e.to_string())
 }
 
-/// Return the path Bode was launched with, if any (consumed once).
+/// Return the paths Bode was launched with, plus any that arrived while the frontend was loading
+/// (consumed once). Later arrivals are emitted as "open-file" instead.
 #[tauri::command]
-fn take_launch_file(state: State<LaunchFile>) -> Option<String> {
-    state.0.lock().ok().and_then(|mut g| g.take())
+fn take_launch_files(state: State<LaunchFiles>) -> Vec<String> {
+    match state.0.lock() {
+        Ok(mut g) => {
+            g.ready = true;
+            std::mem::take(&mut g.paths)
+        }
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Tint the native window title bar (Windows 11) to match the app theme, so it doesn't
@@ -635,8 +656,8 @@ fn set_titlebar_color(window: tauri::WebviewWindow, r: u8, g: u8, b: u8, tr: u8,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // First CLI arg that looks like a real path is treated as a file to open (cold start).
-    let launch_path = first_existing_path(std::env::args().skip(1));
+    // CLI args that look like real paths are files to open (cold start).
+    let launch_paths = existing_paths(std::env::args().skip(1));
 
     let builder = tauri::Builder::default();
 
@@ -646,7 +667,7 @@ pub fn run() {
     // instead of spawning another one. Desktop-only (no mobile support).
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-        let path = first_existing_path(argv.into_iter().skip(1)); // argv[0] is the exe path
+        let paths = existing_paths(argv.into_iter().skip(1)); // argv[0] is the exe path
         // Bring an existing window forward — prefer "main", else any surviving window (in
         // "windows" open-mode the original "main" may have been closed).
         let target = app
@@ -655,8 +676,15 @@ pub fn run() {
         if let Some(win) = target {
             let _ = win.unminimize();
             let _ = win.set_focus();
+            // Still loading: queue the files for the frontend to take with its launch files.
+            if let Ok(mut pending) = app.state::<LaunchFiles>().0.lock() {
+                if !pending.ready {
+                    pending.paths.extend(paths);
+                    return;
+                }
+            }
             // Emit to exactly ONE window; app.emit() would broadcast and double-open the file.
-            if let Some(p) = path {
+            for p in paths {
                 let _ = win.emit("open-file", p);
             }
         }
@@ -667,7 +695,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
-        .manage(LaunchFile(Mutex::new(launch_path)))
+        .manage(LaunchFiles(Mutex::new(PendingOpens { paths: launch_paths, ready: false })))
         .manage(TrustedHtml::default())
         .manage(peer::commands::Nearby::default())
         .register_uri_scheme_protocol("bodehtml", serve_trusted_html)
@@ -675,7 +703,7 @@ pub fn run() {
             read_file_bytes,
             write_file_bytes,
             decrypt_pdf,
-            take_launch_file,
+            take_launch_files,
             trust_html_file,
             window_at_point,
             send_file_to_window,

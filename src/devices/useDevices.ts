@@ -778,6 +778,10 @@ function migrateDocKeys(ctx: KeyContext) {
     return out;
   });
 
+  // Two paths for one document with unsaved page edits under each: there is no merging two page
+  // orders, so keep one.
+  const pageEdits = rekey(annotations.pageEdits, ctx, (a) => a);
+
   const settings = useSettings.getState();
   const lastPositions = rekey(settings.lastPositions, ctx, (a, b) =>
     (b.at ?? 0) > (a.at ?? 0) ? b : a,
@@ -785,7 +789,7 @@ function migrateDocKeys(ctx: KeyContext) {
 
   // Through the stores' own actions, so the re-keyed data reaches disk. A bare `setState` would
   // leave memory and `annotations.json` disagreeing until the next unrelated edit happened to save.
-  useAnnotations.getState().rekeyAll(byFile, deleted);
+  useAnnotations.getState().rekeyAll(byFile, deleted, pageEdits);
   useSettings.getState().setPositions(lastPositions);
 }
 

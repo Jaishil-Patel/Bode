@@ -26,7 +26,12 @@ import {
   subsetManifest,
   type PageRef,
 } from "../pdf/pageOps";
-import { useAnnotations, setPageBridge, type Annotation } from "../annotations/useAnnotations";
+import {
+  useAnnotations,
+  setPageBridge,
+  annotationsReady,
+  type Annotation,
+} from "../annotations/useAnnotations";
 import { rotateAnnotation } from "../annotations/rotate";
 import { useFormValues } from "../forms/useFormValues";
 import type { PdfDocument } from "../pdf/pdfWorker";
@@ -331,8 +336,13 @@ async function buildPdfSnapshot(
   // A file opened at launch can get here before the saved positions have been read.
   await settingsReady();
   const settings = useSettings.getState();
-  const last = settings.lastPositions[settings.docKey(path)];
-  const startPage = last && last.page > 1 ? last.page : 1;
+  const key = settings.docKey(path);
+  const last = settings.lastPositions[key];
+  // Unsaved page edits from an earlier visit. The annotations were stored against that page order,
+  // so it has to come back with them.
+  await annotationsReady();
+  const pages = stagedManifest(useAnnotations.getState().pageEdits[key], doc.numPages);
+  const startPage = last && last.page > 1 ? Math.min(last.page, pages.length) : 1;
 
   return {
     doc,
@@ -345,8 +355,8 @@ async function buildPdfSnapshot(
     htmlReloadNonce: 0,
     fileName: name,
     filePath: path,
-    numPages: doc.numPages,
-    pages: initialManifest(doc.numPages),
+    numPages: pages.length,
+    pages,
     baseSize: { width: vp.width, height: vp.height },
     outline,
     currentPage: 1,
@@ -356,6 +366,25 @@ async function buildPdfSnapshot(
     search: emptySearch(),
     scrollTarget: startPage > 1 ? { page: startPage, nonce: nextNonce(), instant: true } : null,
   };
+}
+
+/**
+ * The saved manifest if it still fits the file, else the file's own page order. One that names a
+ * page the file does not have was made against a different version of it, and cannot be replayed.
+ */
+function stagedManifest(saved: PageRef[] | undefined, numPages: number): PageRef[] {
+  const fits =
+    Array.isArray(saved) &&
+    saved.length > 0 &&
+    saved.every(
+      (p) =>
+        typeof p?.id === "string" &&
+        Number.isInteger(p.srcPage) &&
+        p.srcPage >= 1 &&
+        p.srcPage <= numPages &&
+        [0, 90, 180, 270].includes(p.rotation),
+    );
+  return fits ? saved : initialManifest(numPages);
 }
 
 /**
@@ -411,12 +440,14 @@ function commitPages(
   remap: ReadonlyMap<number, number>,
   transform?: (a: Annotation, fromIndex: number) => Annotation,
 ) {
-  const { filePath, currentPage, search, pages: before } = get();
+  const { filePath, currentPage, search, pages: before, doc } = get();
   if (filePath) {
-    // One undo step for the page edit and the annotations it carried along.
+    // One undo step for the page edit and the annotations it carried along. The new manifest is
+    // kept with them (unless it is the file's own order again), so a reopen finds both as they were.
+    const after = doc && isPristine(next, doc.numPages) ? null : next;
     useAnnotations
       .getState()
-      .recordPageEdit(useSettings.getState().docKey(filePath), before, remap, transform);
+      .recordPageEdit(useSettings.getState().docKey(filePath), before, after, remap, transform);
   }
 
   // Follow the page the reader was on; if it was the one removed, stay at that position in the

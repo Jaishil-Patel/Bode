@@ -242,6 +242,14 @@ interface AnnotationState {
    * everything the other device had ever erased. Pruned after `TOMBSTONE_TTL_MS`.
    */
   deleted: Record<string, Record<string, number>>;
+  /**
+   * Doc key → the staged page manifest, for documents whose pages have been edited but not saved.
+   * It lives here, beside the marks, because annotations are stored by visible page number: a mark
+   * moved up a page by a deletion is only on the right page while that deletion is in force. Kept
+   * apart, the marks would persist and the deletion would not, so on reopening the page would be
+   * back and every mark after it one page too early.
+   */
+  pageEdits: Record<string, PageRef[]>;
   tool: Tool;
   color: string; // used for text & shapes
   strokeWidth: number;
@@ -299,11 +307,13 @@ interface AnnotationState {
   /**
    * Record a page edit (remove, reorder, duplicate, rotate) as one undo step, and carry this
    * file's annotations through it. `before` is the page manifest as it was, so undo can put the
-   * pages back together with the annotations that sat on them.
+   * pages back together with the annotations that sat on them. `after` is the manifest the edit
+   * leaves, kept for the next time the document opens — null once it matches the file again.
    */
   recordPageEdit: (
     file: string,
     before: PageRef[],
+    after: PageRef[] | null,
     map: ReadonlyMap<number, number>,
     transform?: (a: Annotation, fromIndex: number) => Annotation,
   ) => void;
@@ -321,6 +331,7 @@ interface AnnotationState {
   rekeyAll: (
     byFile: Record<string, Annotation[]>,
     deleted: Record<string, Record<string, number>>,
+    pageEdits: Record<string, PageRef[]>,
   ) => void;
   /** What to send another device for one document. */
   setFor: (file: string) => AnnotationSet;
@@ -332,6 +343,7 @@ interface AnnotationState {
 interface HistoryEntry {
   byFile: Record<string, Annotation[]>;
   deleted: Record<string, Record<string, number>>;
+  pageEdits: Record<string, PageRef[]>;
   /** Set on a page edit: that document's page manifest at this point in history. */
   pages?: { file: string; pages: PageRef[] };
 }
@@ -364,6 +376,7 @@ type Persisted = Pick<
   AnnotationState,
   | "byFile"
   | "deleted"
+  | "pageEdits"
   | "color"
   | "strokeWidth"
   | "markWeight"
@@ -452,7 +465,10 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
   // Capture the current annotation map and tombstones as one undo step, and drop the redo stack.
   const pushHistory = () =>
     set((st) => ({
-      past: [...st.past, { byFile: st.byFile, deleted: st.deleted }].slice(-HISTORY_LIMIT),
+      past: [
+        ...st.past,
+        { byFile: st.byFile, deleted: st.deleted, pageEdits: st.pageEdits },
+      ].slice(-HISTORY_LIMIT),
       future: [],
     }));
 
@@ -478,6 +494,7 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     hydrated: false,
     byFile: {},
     deleted: {},
+    pageEdits: {},
     tool: "select",
     color: "#ef4444",
     strokeWidth: 2,
@@ -686,12 +703,14 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     },
     clearFile: (file) => {
       const list = get().byFile[file] ?? [];
-      if (list.length === 0) return;
+      // The page edits were baked in by the same save, so they go too.
+      if (list.length === 0 && !get().pageEdits[file]) return;
       pushHistory();
       coalesceKey = null;
       const gone = new Set(list.map((a) => a.id));
       set((st) => ({
         byFile: { ...st.byFile, [file]: [] },
+        pageEdits: withoutKey(st.pageEdits, file),
         // Tombstoned like any delete, or the next sync would hand them straight back.
         deleted: tombstone(st.deleted, file, [...gone], Date.now()),
         selectedId: st.selectedId && gone.has(st.selectedId) ? null : st.selectedId,
@@ -704,18 +723,27 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
      * new visible page index map. Annotations on pages missing from the map are dropped with the
      * page. One history entry, so undo restores placement and removal together.
      */
-    recordPageEdit: (file, before, map, transform) => {
+    recordPageEdit: (file, before, after, map, transform) => {
       // Always a history step, even with no annotations to move: the page edit itself is undoable.
       coalesceKey = null;
       set((st) => ({
         past: [
           ...st.past,
-          { byFile: st.byFile, deleted: st.deleted, pages: { file, pages: before } },
+          {
+            byFile: st.byFile,
+            deleted: st.deleted,
+            pageEdits: st.pageEdits,
+            pages: { file, pages: before },
+          },
         ].slice(-HISTORY_LIMIT),
         future: [],
+        pageEdits: after ? { ...st.pageEdits, [file]: after } : withoutKey(st.pageEdits, file),
       }));
       const list = get().byFile[file];
-      if (!list?.length) return;
+      if (!list?.length) {
+        save();
+        return;
+      }
       const now = Date.now();
       set((st) => {
         const current = st.byFile[file] ?? [];
@@ -739,7 +767,9 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
     },
     forgetPageHistory: (file) => {
       const strip = (e: HistoryEntry): HistoryEntry =>
-        e.pages?.file === file ? { byFile: e.byFile, deleted: e.deleted } : e;
+        e.pages?.file === file
+          ? { byFile: e.byFile, deleted: e.deleted, pageEdits: e.pageEdits }
+          : e;
       set((st) => ({ past: st.past.map(strip), future: st.future.map(strip) }));
     },
     undo: () => {
@@ -749,10 +779,16 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       const restoring = past[past.length - 1].pages;
       set((st) => {
         const entry = st.past[st.past.length - 1];
-        const mirror = { byFile: st.byFile, deleted: st.deleted, pages: currentPagesFor(entry) };
+        const mirror = {
+          byFile: st.byFile,
+          deleted: st.deleted,
+          pageEdits: st.pageEdits,
+          pages: currentPagesFor(entry),
+        };
         return {
           byFile: entry.byFile,
           deleted: entry.deleted,
+          pageEdits: entry.pageEdits,
           past: st.past.slice(0, -1),
           future: [mirror, ...st.future].slice(0, HISTORY_LIMIT),
           selectedId: null,
@@ -769,10 +805,16 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
       const restoring = future[0].pages;
       set((st) => {
         const entry = st.future[0];
-        const mirror = { byFile: st.byFile, deleted: st.deleted, pages: currentPagesFor(entry) };
+        const mirror = {
+          byFile: st.byFile,
+          deleted: st.deleted,
+          pageEdits: st.pageEdits,
+          pages: currentPagesFor(entry),
+        };
         return {
           byFile: entry.byFile,
           deleted: entry.deleted,
+          pageEdits: entry.pageEdits,
           future: st.future.slice(1),
           past: [...st.past, mirror].slice(-HISTORY_LIMIT),
           selectedId: null,
@@ -788,8 +830,8 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
      * survives with the same id and the same geometry, so there is nothing for a user to undo — and
      * an undo that put the old keys back would only hide the documents again.
      */
-    rekeyAll: (byFile, deleted) => {
-      set({ byFile, deleted });
+    rekeyAll: (byFile, deleted, pageEdits) => {
+      set({ byFile, deleted, pageEdits });
       save();
     },
 
@@ -835,6 +877,16 @@ export const useAnnotations = create<AnnotationState>((set, get) => {
   };
 });
 
+function withoutKey<V>(rec: Record<string, V>, key: string): Record<string, V> {
+  if (!(key in rec)) return rec;
+  const rest = { ...rec };
+  delete rest[key];
+  return rest;
+}
+
+/** Resolves once the saved annotations (and staged page edits) have been read. */
+export const annotationsReady = () => shared.hydrate();
+
 export const newId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
@@ -846,9 +898,11 @@ export const newId = () =>
  * never be split across two writes — and each drawing preference is its own key, so a colour
  * picked in one window reaches the others and is never written back over by a stale one.
  */
-type Documents = Pick<Persisted, "byFile" | "deleted">;
+type Documents = Pick<Persisted, "byFile" | "deleted" | "pageEdits">;
 
-const annotationField = <K extends Exclude<keyof Persisted, "byFile" | "deleted">>(
+const annotationField = <
+  K extends Exclude<keyof Persisted, "byFile" | "deleted" | "pageEdits">,
+>(
   key: K,
   normalize: (v: Persisted[K]) => Persisted[K] = (v) => v,
 ) => ({
@@ -863,12 +917,14 @@ const shared = sharedStore({
     documents: {
       read: (): Documents => {
         const s = useAnnotations.getState();
-        return { byFile: s.byFile, deleted: s.deleted };
+        return { byFile: s.byFile, deleted: s.deleted, pageEdits: s.pageEdits };
       },
       apply: (v: Documents) =>
         useAnnotations.setState({
           byFile: migrate(v?.byFile ?? {}),
           deleted: migrateTombstones(v?.deleted ?? {}),
+          // Absent in files written before page edits were kept.
+          pageEdits: v?.pageEdits ?? {},
         }),
     },
     color: annotationField("color", (v) => v ?? "#ef4444"),
